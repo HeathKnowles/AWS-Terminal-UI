@@ -12,10 +12,27 @@ use crossterm::terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScree
 use crossterm::ExecutableCommand;
 use ratatui::prelude::*;
 use ratatui::widgets::{
-    Block, BorderType, Borders, Clear, List, ListItem, ListState, Paragraph, Scrollbar,
-    ScrollbarOrientation, ScrollbarState,
+    Block, BorderType, Borders, Cell, Clear, List, ListItem, ListState, Paragraph, Row,
+    Scrollbar, ScrollbarOrientation, ScrollbarState, Table, TableState,
 };
 const CLI_VERSION: &str = "2.36.18";
+
+struct Theme {
+    accent: Color,
+    border: Color,
+    focus: Color,
+    ok: Color,
+    err: Color,
+    warn: Color,
+}
+const THEME: Theme = Theme {
+    accent: Color::Cyan,
+    border: Color::DarkGray,
+    focus: Color::Cyan,
+    ok: Color::LightGreen,
+    err: Color::LightRed,
+    warn: Color::Yellow,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Focus {
@@ -28,6 +45,12 @@ enum Focus {
 enum Picker {
     Region,
     Profile,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OutputView {
+    Auto,
+    Raw,
 }
 
 struct App {
@@ -49,6 +72,7 @@ struct App {
     last_exit: Option<i32>,
     output_scroll: u16,
     details_scroll: u16,
+    view: OutputView,
 
     // UI state
     focus: Focus,
@@ -162,6 +186,7 @@ impl App {
                 self.last_json = serde_json::from_str(&out.stdout).ok();
                 self.output = out.stdout.clone();
                 self.output_scroll = 0;
+                self.view = OutputView::Auto;
                 self.last_exit = Some(out.exit_code);
                 self.audit.executed(
                     &intent,
@@ -213,7 +238,9 @@ impl App {
             Some(q) => match apply_query(&last, q) {
                 Ok(v) => {
                     self.output = serde_json::to_string_pretty(&v).unwrap_or_default();
+                    self.last_json = Some(v);
                     self.output_scroll = 0;
+                    self.view = OutputView::Auto;
                 }
                 Err(e) => self.output = format!("query failed: {e}"),
             },
@@ -333,6 +360,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         last_exit: None,
         output_scroll: 0,
         details_scroll: 0,
+        view: OutputView::Auto,
         focus: Focus::Search,
         picker: None,
         picker_idx: 0,
@@ -438,6 +466,12 @@ fn handle_key(app: &mut App, code: KeyCode, modifiers: KeyModifiers) -> bool {
                 app.build_preview();
             }
         }
+        KeyCode::Char('v') if app.focus == Focus::Output => {
+            app.view = match app.view {
+                OutputView::Auto => OutputView::Raw,
+                OutputView::Raw => OutputView::Auto,
+            };
+        }
         KeyCode::Up => match app.focus {
             Focus::Output => {
                 app.output_scroll = app.output_scroll.saturating_sub(1);
@@ -498,79 +532,141 @@ fn draw(f: &mut Frame, app: &mut App) {
         ])
         .split(f.area());
 
-    // Status line
+    draw_status(f, app, chunks[0]);
+    draw_search(f, app, chunks[1]);
+
+    // Middle: results + details
+    let mid = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(38), Constraint::Percentage(62)])
+        .split(chunks[2]);
+    draw_results(f, app, mid[0]);
+    draw_details(f, app, mid[1]);
+
+    draw_output(f, app, chunks[3]);
+    draw_footer(f, app, chunks[4]);
+
+    if let Some(kind) = app.picker {
+        draw_picker(f, app, kind);
+    }
+}
+
+fn pane_border(focus: bool) -> BorderType {
+    if focus {
+        BorderType::Double
+    } else {
+        BorderType::Rounded
+    }
+}
+
+fn pane_border_color(focus: bool) -> Color {
+    if focus {
+        THEME.focus
+    } else {
+        THEME.border
+    }
+}
+
+fn draw_status(f: &mut Frame, app: &App, area: Rect) {
     let focus_name = match app.focus {
         Focus::Search => "search",
         Focus::Results => "results",
         Focus::Output => "output",
     };
-    let status = format!(
-        " aws-tui  |  region: {} ({})  |  profile: {}  |  focus: {}",
-        app.env.active_region, app.env.region_source, app.env.active_profile, focus_name
-    );
+    let status = Line::from(vec![
+        Span::styled(" aws-tui ", Style::default().fg(Color::Black).add_modifier(Modifier::BOLD)),
+        Span::raw(" │ "),
+        Span::styled("region ", Style::default().fg(Color::DarkGray)),
+        Span::styled(
+            app.env.active_region.clone(),
+            Style::default().fg(Color::Black).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(format!(" ({})", app.env.region_source), Style::default().fg(Color::DarkGray)),
+        Span::raw("  │  "),
+        Span::styled("profile ", Style::default().fg(Color::DarkGray)),
+        Span::styled(app.env.active_profile.clone(), Style::default().fg(Color::Black).add_modifier(Modifier::BOLD)),
+        Span::raw("  │  "),
+        Span::styled("focus ", Style::default().fg(Color::DarkGray)),
+        Span::styled(focus_name, Style::default().fg(Color::Black).add_modifier(Modifier::BOLD)),
+    ]);
     f.render_widget(
         Paragraph::new(status)
-            .style(Style::default().fg(Color::Black).bg(Color::Cyan))
-            .add_modifier(Modifier::BOLD),
-        chunks[0],
+            .style(Style::default().bg(Color::Cyan))
+            .block(Block::default().style(Style::default().bg(Color::Cyan))),
+        area,
     );
+}
 
-    // Search input
-    let border = if app.focus == Focus::Search {
-        BorderType::Double
-    } else {
-        BorderType::Rounded
-    };
-    let input = Paragraph::new(app.query.as_str())
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_type(border)
-                .title(" Search  (F2 region · F3 profile · Enter run · '>' follow-up) "),
-        );
-    f.render_widget(input, chunks[1]);
-    f.set_cursor_position((chunks[1].x + app.query.len() as u16 + 1, chunks[1].y + 1));
+fn draw_search(f: &mut Frame, app: &App, area: Rect) {
+    let focused = app.focus == Focus::Search;
+    let input = Paragraph::new(app.query.as_str()).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_type(pane_border(focused))
+            .border_style(Style::default().fg(pane_border_color(focused)))
+            .title(Span::styled(
+                " Search ",
+                Style::default().fg(THEME.accent).add_modifier(Modifier::BOLD),
+            ))
+            .title(Span::styled(
+                " F2 region · F3 profile · Enter run · '>' follow-up ",
+                Style::default().fg(Color::DarkGray),
+            )),
+    );
+    f.render_widget(input, area);
+    f.set_cursor_position((area.x + app.query.len() as u16 + 1, area.y + 1));
+}
 
-    // Middle: results + details
-    let mid = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(40), Constraint::Percentage(60)])
-        .split(chunks[2]);
-
-    // Results list
+fn draw_results(f: &mut Frame, app: &App, area: Rect) {
+    let focused = app.focus == Focus::Results;
     let items: Vec<ListItem> = app
         .results
         .iter()
         .map(|(i, _)| {
             let row = &app.index.rows[*i];
-            let op = if row.operation.is_empty() {
-                format!("[{}]", row.service)
+            if row.operation.is_empty() {
+                // service row
+                ListItem::new(Span::styled(
+                    format!("[{}]", row.service),
+                    Style::default().fg(Color::LightBlue).add_modifier(Modifier::BOLD),
+                ))
             } else {
-                format!("{}.{}", row.service, row.operation)
-            };
-            ListItem::new(op)
+                ListItem::new(Line::from(vec![
+                    Span::styled(format!("{:.<20}", row.service), Style::default().fg(Color::DarkGray)),
+                    Span::styled(row.operation.clone(), Style::default().fg(Color::White)),
+                ]))
+            }
         })
         .collect();
-    let list_title = format!(" Results ({})  ", app.results.len());
-    let list = List::new(items).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .border_type(if app.focus == Focus::Results {
-                BorderType::Double
-            } else {
-                BorderType::Rounded
-            })
-            .title(list_title),
-    );
+    let list = List::new(items)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_type(pane_border(focused))
+                .border_style(Style::default().fg(pane_border_color(focused)))
+                .title(Span::styled(
+                    format!(" Results ({}) ", app.results.len()),
+                    Style::default().fg(THEME.accent).add_modifier(Modifier::BOLD),
+                )),
+        )
+        .highlight_style(
+            Style::default()
+                .bg(THEME.accent)
+                .fg(Color::Black)
+                .add_modifier(Modifier::BOLD),
+        )
+        .highlight_symbol("▍");
     let mut st = ListState::default();
     if let Some(sel) = app.selected {
         if let Some(pos) = app.results.iter().position(|(i, _)| *i == sel) {
             st = ListState::default().with_selected(Some(pos));
         }
     }
-    f.render_stateful_widget(list, mid[0], &mut st);
+    f.render_stateful_widget(list, area, &mut st);
+}
 
-    // Details pane
+fn draw_details(f: &mut Frame, app: &mut App, area: Rect) {
+    let focused = app.focus == Focus::Results || app.focus == Focus::Search;
     let (cmd_line, docs, params, validation) = match (&app.intent, &app.validation_error) {
         (Some(i), err) => {
             let op = app
@@ -584,17 +680,31 @@ fn draw(f: &mut Frame, app: &mut App) {
         _ => (String::new(), String::new(), Vec::new(), None),
     };
 
-    let mut details = String::new();
-    details.push_str(&cmd_line);
-    details.push('\n');
+    let mut lines: Vec<Line> = Vec::new();
+    lines.push(Line::from(vec![
+        Span::styled("$ ", Style::default().fg(Color::DarkGray)),
+        Span::styled(cmd_line, Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+    ]));
     match &validation {
-        Some(e) => details.push_str(&format!("[validation] {e}\n")),
-        None => details.push_str("[validation] OK\n"),
+        Some(e) => lines.push(Line::from(vec![
+            Span::styled("validation ", Style::default().fg(Color::DarkGray)),
+            Span::styled(format!("[ERR] {e}"), Style::default().fg(THEME.err).add_modifier(Modifier::BOLD)),
+        ])),
+        None => lines.push(Line::from(vec![
+            Span::styled("validation ", Style::default().fg(Color::DarkGray)),
+            Span::styled("[OK]", Style::default().fg(THEME.ok).add_modifier(Modifier::BOLD)),
+        ])),
     }
-    details.push('\n');
-    details.push_str("input params:\n");
+    lines.push(Line::default());
+    lines.push(Line::from(Span::styled(
+        "input params:",
+        Style::default().fg(THEME.accent).add_modifier(Modifier::BOLD),
+    )));
     if params.is_empty() {
-        details.push_str("  (none)\n");
+        lines.push(Line::from(Span::styled(
+            "  (none)",
+            Style::default().fg(Color::DarkGray),
+        )));
     } else {
         for p in &params {
             let star = if p.required { "*" } else { " " };
@@ -603,53 +713,130 @@ fn draw(f: &mut Frame, app: &mut App) {
             } else {
                 p.type_name.clone()
             };
-            details.push_str(&format!("  {star} --{:<28} {}\n", p.cli_name, ty));
+            lines.push(Line::from(vec![
+                Span::styled(star, Style::default().fg(if p.required { THEME.warn } else { Color::DarkGray })),
+                Span::styled(
+                    format!("--{}", p.cli_name),
+                    Style::default().fg(if p.required { Color::White } else { Color::DarkGray }),
+                ),
+                Span::styled(format!("  {ty}"), Style::default().fg(Color::DarkGray)),
+            ]));
         }
     }
     if !docs.is_empty() {
-        details.push_str("\ndocs:\n");
-        details.push_str(&wrap_text(&docs, 72));
-        details.push('\n');
+        lines.push(Line::default());
+        lines.push(Line::from(Span::styled(
+            "docs:",
+            Style::default().fg(THEME.accent).add_modifier(Modifier::BOLD),
+        )));
+        for wrapped in wrap_text(&docs, 72).lines() {
+            lines.push(Line::from(Span::styled(wrapped.to_string(), Style::default().fg(Color::Gray))));
+        }
     }
-    let details_lines = details.lines().count() as u16;
-    let details_widget = Paragraph::new(details)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_type(BorderType::Rounded)
-                .title(" Details  (PageUp/PageDown scroll) "),
-        )
-        .scroll((app.details_scroll, 0));
-    f.render_widget(details_widget, mid[1]);
-    if details_lines > mid[1].height.saturating_sub(2) {
+    let details_lines = lines.len() as u16;
+    let details_widget = Paragraph::new(lines).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_type(pane_border(focused))
+            .border_style(Style::default().fg(pane_border_color(focused)))
+            .title(Span::styled(
+                " Details ",
+                Style::default().fg(THEME.accent).add_modifier(Modifier::BOLD),
+            )),
+    );
+    f.render_widget(details_widget, area);
+    if details_lines > area.height.saturating_sub(2) {
+        let max_scroll = details_lines.saturating_sub(area.height.saturating_sub(2));
+        if app.details_scroll > max_scroll {
+            app.details_scroll = max_scroll;
+        }
         let mut sb = ScrollbarState::new(details_lines as usize).position(app.details_scroll as usize);
         f.render_stateful_widget(
             Scrollbar::default().orientation(ScrollbarOrientation::VerticalRight),
-            mid[1],
+            area,
             &mut sb,
         );
     }
+}
 
-    // Output pane
-    let border = if app.focus == Focus::Output {
-        BorderType::Double
-    } else {
-        BorderType::Rounded
-    };
+fn draw_output(f: &mut Frame, app: &mut App, area: Rect) {
+    let focused = app.focus == Focus::Output;
+    let view_label = if app.view == OutputView::Raw { "json" } else { "table" };
     let title = format!(
-        " Output{} ",
+        " Output{} · {view_label} ",
         if let Some(rc) = app.last_exit {
             format!("(exit {rc})")
         } else {
             String::new()
         }
     );
-    let out = Paragraph::new(app.output.clone())
-        .block(Block::default().borders(Borders::ALL).border_type(border).title(title))
-        .scroll((app.output_scroll, 0));
-    f.render_widget(out, chunks[3]);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(pane_border(focused))
+        .border_style(Style::default().fg(pane_border_color(focused)))
+        .title(Span::styled(
+            title,
+            Style::default().fg(THEME.accent).add_modifier(Modifier::BOLD),
+        ));
+
+    // Try structured table view first (Auto mode + parseable JSON).
+    if app.view == OutputView::Auto {
+        if let Some(json) = &app.last_json {
+            if let Some((headers, rows)) = table_from_json(json) {
+                if !rows.is_empty() {
+                    let widths = std::iter::repeat(Constraint::Fill(1))
+                        .take(headers.len())
+                        .collect::<Vec<_>>();
+                    let header_cells = headers
+                        .iter()
+                        .map(|h| {
+                            Cell::from(h.clone())
+                                .style(Style::default().fg(Color::Black).bg(THEME.accent).add_modifier(Modifier::BOLD))
+                        })
+                        .collect::<Vec<_>>();
+                    let header = Row::new(header_cells);
+                    let body = rows.iter().map(|r| {
+                        Row::new(
+                            r.iter()
+                                .map(|c| Cell::from(c.clone()).style(Style::default().fg(Color::White)))
+                                .collect::<Vec<_>>(),
+                        )
+                    });
+                    let mut table_state = TableState::default();
+                    table_state.scroll_down_by(app.output_scroll);
+                    let table = Table::new(body, widths)
+                        .header(header)
+                        .block(block)
+                        .row_highlight_style(Style::default().bg(Color::Black));
+                    f.render_stateful_widget(table, area, &mut table_state);
+
+                    let total = rows.len() as u16 + 1;
+                    let viewport = area.height.saturating_sub(2);
+                    if total > viewport {
+                        let max_scroll = total.saturating_sub(viewport);
+                        if app.output_scroll > max_scroll {
+                            app.output_scroll = max_scroll;
+                        }
+                        let mut sb = ScrollbarState::new(total as usize)
+                            .position(app.output_scroll as usize);
+                        f.render_stateful_widget(
+                            Scrollbar::default().orientation(ScrollbarOrientation::VerticalRight),
+                            area,
+                            &mut sb,
+                        );
+                    }
+                    return;
+                }
+            }
+        }
+    }
+
+    // Raw / syntax-highlighted JSON
+    let lines = highlight_json(&app.output);
+    let out = Paragraph::new(lines).block(block).scroll((app.output_scroll, 0));
+    f.render_widget(out, area);
     let total = app.output_line_count();
-    let viewport = chunks[3].height.saturating_sub(2);
+    let viewport = area.height.saturating_sub(2);
     if total > viewport {
         let max_scroll = total.saturating_sub(viewport);
         if app.output_scroll > max_scroll {
@@ -658,27 +845,37 @@ fn draw(f: &mut Frame, app: &mut App) {
         let mut sb = ScrollbarState::new(total as usize).position(app.output_scroll as usize);
         f.render_stateful_widget(
             Scrollbar::default().orientation(ScrollbarOrientation::VerticalRight),
-            chunks[3],
+            area,
             &mut sb,
         );
     }
+}
 
-    // Footer keybindings
-    let footer = format!(
-        " [F2] region  [F3] profile  [Tab] focus  [Enter] run  [PgUp/PgDn] scroll  [Esc] back  [q/Ctrl-C] quit  |  {}{}",
-        app.provenance_line,
-        if app.status.is_empty() {
-            String::new()
-        } else {
-            format!("  |  {}", app.status)
-        }
-    );
-    f.render_widget(Paragraph::new(footer), chunks[4]);
-
-    // Picker overlay
-    if let Some(kind) = app.picker {
-        draw_picker(f, app, kind);
-    }
+fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
+    let status_style = match &app.status {
+        s if s.starts_with("ok") => Style::default().fg(THEME.ok),
+        s if s.starts_with("failed") || s.starts_with("running") => Style::default().fg(THEME.err),
+        _ => Style::default().fg(Color::DarkGray),
+    };
+    let footer = Line::from(vec![
+        Span::styled(" [F2] region  [F3] profile  [Tab] focus  ", Style::default().fg(Color::DarkGray)),
+        Span::styled("Enter run  ", Style::default().fg(THEME.ok).add_modifier(Modifier::BOLD)),
+        Span::styled("[PgUp/PgDn] scroll  [v] table/json  ", Style::default().fg(Color::DarkGray)),
+        Span::styled("[Esc] back  [q/Ctrl-C] quit", Style::default().fg(Color::DarkGray)),
+        Span::styled(
+            format!(
+                "  |  {}{}",
+                app.provenance_line,
+                if app.status.is_empty() {
+                    String::new()
+                } else {
+                    format!("  |  {}", app.status)
+                }
+            ),
+            status_style,
+        ),
+    ]);
+    f.render_widget(Paragraph::new(footer).style(Style::default().bg(Color::Black)), area);
 }
 
 fn draw_picker(f: &mut Frame, app: &App, kind: Picker) {
@@ -697,17 +894,25 @@ fn draw_picker(f: &mut Frame, app: &App, kind: Picker) {
         .iter()
         .enumerate()
         .map(|(i, name)| {
-            let mark = if i == app.picker_idx { "> " } else { "  " };
-            ListItem::new(format!("{mark}{name}"))
+            let selected = i == app.picker_idx;
+            let mark = if selected { "▸ " } else { "  " };
+            ListItem::new(Line::from(vec![
+                Span::styled(mark, Style::default().fg(THEME.accent)),
+                Span::styled(name.clone(), Style::default().fg(if selected { Color::Black } else { Color::White })),
+            ]))
         })
         .collect();
-    let list = List::new(list_items).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .border_type(BorderType::Double)
-            .title(title)
-            .style(Style::default().bg(Color::DarkGray)),
-    );
+    let list = List::new(list_items)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_type(BorderType::Double)
+                .border_style(Style::default().fg(THEME.accent))
+                .title(Span::styled(title, Style::default().fg(THEME.accent).add_modifier(Modifier::BOLD)))
+                .style(Style::default().bg(Color::DarkGray)),
+        )
+        .highlight_style(Style::default().bg(THEME.accent).fg(Color::Black).add_modifier(Modifier::BOLD))
+        .highlight_symbol("");
     let mut st = ListState::default().with_selected(Some(app.picker_idx));
     f.render_widget(Clear, pop);
     f.render_stateful_widget(list, pop, &mut st);
@@ -729,4 +934,186 @@ fn wrap_text(s: &str, width: usize) -> String {
         line_len += word.len();
     }
     out
+}
+
+/// Try to present a JSON value as a (headers, rows) table.
+/// Handles: array of objects, array of scalars, object-of-objects via its
+/// first list-valued key, and flat key/value maps.
+fn table_from_json(value: &serde_json::Value) -> Option<(Vec<String>, Vec<Vec<String>>)> {
+    match value {
+        serde_json::Value::Array(items) => {
+            if items.is_empty() {
+                return None;
+            }
+            if items.iter().all(|i| i.is_object()) {
+                let mut headers: Vec<String> = Vec::new();
+                for item in items {
+                    if let Some(obj) = item.as_object() {
+                        for (k, _) in obj {
+                            if !headers.contains(k) {
+                                headers.push(k.clone());
+                            }
+                        }
+                    }
+                }
+                if headers.is_empty() {
+                    return None;
+                }
+                let rows = items
+                    .iter()
+                    .map(|item| {
+                        let obj = item.as_object().unwrap();
+                        headers
+                            .iter()
+                            .map(|h| obj.get(h).map(cell_str).unwrap_or_default())
+                            .collect::<Vec<String>>()
+                    })
+                    .collect();
+                Some((headers, rows))
+            } else if items.iter().all(|i| i.is_string() || i.is_number() || i.is_boolean() || i.is_null()) {
+                let rows = items
+                    .iter()
+                    .map(|i| vec![cell_str(i)])
+                    .collect::<Vec<Vec<String>>>();
+                Some((vec!["value".to_string()], rows))
+            } else {
+                None
+            }
+        }
+        serde_json::Value::Object(map) => {
+            // Find the first list-valued key whose items are objects.
+            for (_key, val) in map {
+                if let serde_json::Value::Array(items) = val {
+                    if !items.is_empty() && items.iter().all(|i| i.is_object()) {
+                        let mut headers: Vec<String> = Vec::new();
+                        for item in items {
+                            for (k, _) in item.as_object().unwrap() {
+                                if !headers.contains(k) {
+                                    headers.push(k.clone());
+                                }
+                            }
+                        }
+                        if headers.is_empty() {
+                            continue;
+                        }
+                        let rows = items
+                            .iter()
+                            .map(|item| {
+                                let obj = item.as_object().unwrap();
+                                headers
+                                    .iter()
+                                    .map(|h| obj.get(h).map(cell_str).unwrap_or_default())
+                                    .collect::<Vec<String>>()
+                            })
+                            .collect();
+                        return Some((headers, rows));
+                    }
+                }
+            }
+            // Flat map of scalars -> two column key/value table.
+            if map.values().all(|v| v.is_string() || v.is_number() || v.is_boolean() || v.is_null()) {
+                let rows = map
+                    .iter()
+                    .map(|(k, v)| vec![k.clone(), cell_str(v)])
+                    .collect::<Vec<Vec<String>>>();
+                return Some((vec!["key".to_string(), "value".to_string()], rows));
+            }
+            None
+        }
+        _ => None,
+    }
+}
+
+fn cell_str(v: &serde_json::Value) -> String {
+    match v {
+        serde_json::Value::String(s) => s.clone(),
+        serde_json::Value::Null => "null".to_string(),
+        serde_json::Value::Bool(b) => b.to_string(),
+        serde_json::Value::Number(n) => n.to_string(),
+        other => {
+            let s = serde_json::to_string(other).unwrap_or_default();
+            let truncated: String = s.chars().take(16).collect();
+            if s.chars().count() > 16 {
+                format!("{truncated}…")
+            } else {
+                truncated
+            }
+        }
+    }
+}
+
+/// Minimal JSON syntax highlighter producing styled lines.
+fn highlight_json(s: &str) -> Vec<Line<'static>> {
+    let key_style = Style::default().fg(Color::Cyan);
+    let str_style = Style::default().fg(Color::LightGreen);
+    let num_style = Style::default().fg(Color::Yellow);
+    let word_style = Style::default().fg(Color::Magenta);
+    let punct_style = Style::default().fg(Color::DarkGray);
+
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    let mut chars = s.chars().peekable();
+    while let Some(ch) = chars.next() {
+        match ch {
+            '"' => {
+                let mut buf = String::new();
+                buf.push('"');
+                let mut escaped = false;
+                while let Some(c) = chars.next() {
+                    buf.push(c);
+                    if escaped {
+                        escaped = false;
+                    } else if c == '\\' {
+                        escaped = true;
+                    } else if c == '"' {
+                        break;
+                    }
+                }
+                // A string is a key if the next non-space char is ':'
+                let mut look = chars.clone();
+                let next_non_space = look.find(|c| !c.is_whitespace());
+                let is_key = next_non_space == Some(':');
+                spans.push(Span::styled(buf, if is_key { key_style } else { str_style }));
+            }
+            '0'..='9' | '-' => {
+                let mut buf = String::new();
+                buf.push(ch);
+                while let Some(&c) = chars.peek() {
+                    if c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '+' || c == 'e' || c == 'E' {
+                        buf.push(c);
+                        chars.next();
+                    } else {
+                        break;
+                    }
+                }
+                spans.push(Span::styled(buf, num_style));
+            }
+            't' | 'f' | 'n' => {
+                let mut buf = String::new();
+                buf.push(ch);
+                while let Some(&c) = chars.peek() {
+                    if c.is_ascii_alphabetic() {
+                        buf.push(c);
+                        chars.next();
+                    } else {
+                        break;
+                    }
+                }
+                spans.push(Span::styled(buf, word_style));
+            }
+            '\n' => {
+                lines.push(Line::from(std::mem::take(&mut spans)));
+            }
+            c if c.is_whitespace() => {
+                spans.push(Span::raw(c.to_string()));
+            }
+            c => {
+                spans.push(Span::styled(c.to_string(), punct_style));
+            }
+        }
+    }
+    if !spans.is_empty() {
+        lines.push(Line::from(spans));
+    }
+    lines
 }
