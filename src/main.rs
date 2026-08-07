@@ -784,29 +784,43 @@ fn draw_output(f: &mut Frame, app: &mut App, area: Rect) {
         if let Some(json) = &app.last_json {
             if let Some((headers, rows)) = table_from_json(json) {
                 if !rows.is_empty() {
-                    let widths = std::iter::repeat(Constraint::Fill(1))
-                        .take(headers.len())
-                        .collect::<Vec<_>>();
+                    let inner_w = area.width.saturating_sub(2);
+                    let widths = column_widths(&headers, &rows, inner_w);
+                    let cell_widths: Vec<usize> = widths
+                        .iter()
+                        .map(|c| match c {
+                            Constraint::Length(l) => (*l).max(1) as usize,
+                            _ => 20,
+                        })
+                        .collect();
                     let header_cells = headers
                         .iter()
-                        .map(|h| {
-                            Cell::from(h.clone())
+                        .zip(&cell_widths)
+                        .map(|(h, w)| {
+                            Cell::from(truncate_cell(h, *w))
                                 .style(Style::default().fg(Color::Black).bg(THEME.accent).add_modifier(Modifier::BOLD))
                         })
                         .collect::<Vec<_>>();
                     let header = Row::new(header_cells);
-                    let body = rows.iter().map(|r| {
-                        Row::new(
-                            r.iter()
-                                .map(|c| Cell::from(c.clone()).style(Style::default().fg(Color::White)))
-                                .collect::<Vec<_>>(),
-                        )
+                    let body = rows.iter().enumerate().map(|(i, r)| {
+                        let cells = r
+                            .iter()
+                            .zip(&cell_widths)
+                            .map(|(c, w)| Cell::from(wrap_text(c, *w)))
+                            .collect::<Vec<_>>();
+                        let style = if i % 2 == 0 {
+                            Style::default().fg(Color::White)
+                        } else {
+                            Style::default().fg(Color::White).bg(Color::Indexed(235))
+                        };
+                        Row::new(cells).style(style)
                     });
                     let mut table_state = TableState::default();
                     table_state.scroll_down_by(app.output_scroll);
                     let table = Table::new(body, widths)
                         .header(header)
                         .block(block)
+                        .column_spacing(2)
                         .row_highlight_style(Style::default().bg(Color::Black));
                     f.render_stateful_widget(table, area, &mut table_state);
 
@@ -1030,16 +1044,106 @@ fn cell_str(v: &serde_json::Value) -> String {
         serde_json::Value::Null => "null".to_string(),
         serde_json::Value::Bool(b) => b.to_string(),
         serde_json::Value::Number(n) => n.to_string(),
-        other => {
-            let s = serde_json::to_string(other).unwrap_or_default();
-            let truncated: String = s.chars().take(16).collect();
-            if s.chars().count() > 16 {
-                format!("{truncated}…")
+        other => compact_value(other, 48),
+    }
+}
+
+fn compact_value(v: &serde_json::Value, budget: usize) -> String {
+    match v {
+        serde_json::Value::Null => "null".to_string(),
+        serde_json::Value::Bool(b) => b.to_string(),
+        serde_json::Value::Number(n) => n.to_string(),
+        serde_json::Value::String(s) => s.clone(),
+        serde_json::Value::Array(items) => {
+            if items.is_empty() {
+                return "[]".to_string();
+            }
+            let mut parts: Vec<String> = Vec::new();
+            let mut len = 0usize;
+            for it in items {
+                let p = compact_value(it, budget.saturating_sub(len).max(4) / 2);
+                len += p.len() + 2;
+                if len > budget {
+                    break;
+                }
+                parts.push(p);
+            }
+            if items.len() > parts.len() {
+                format!("[{} items]", items.len())
             } else {
-                truncated
+                format!("[{}]", parts.join(", "))
+            }
+        }
+        serde_json::Value::Object(map) => {
+            if map.is_empty() {
+                return "{}".to_string();
+            }
+            let mut parts: Vec<String> = Vec::new();
+            let mut len = 1usize;
+            for (k, _) in map {
+                let kv = k.clone();
+                len += kv.len() + 2;
+                if len > budget {
+                    break;
+                }
+                parts.push(kv);
+            }
+            if map.len() > parts.len() {
+                format!("{{{}, …}}", parts.join(", "))
+            } else {
+                format!("{{{}}}", parts.join(", "))
             }
         }
     }
+}
+
+fn truncate_cell(s: &str, width: usize) -> String {
+    let chars: Vec<char> = s.chars().collect();
+    if chars.len() <= width {
+        return s.to_string();
+    }
+    let take = width.saturating_sub(1);
+    let head: String = chars[..take].iter().collect();
+    format!("{head}…")
+}
+
+fn column_widths(headers: &[String], rows: &[Vec<String>], available: u16) -> Vec<Constraint> {
+    let n = headers.len();
+    let min_w = 4u16;
+    let max_w = 40u16;
+    let mut desired: Vec<u16> = headers
+        .iter()
+        .map(|h| h.chars().count() as u16)
+        .collect();
+    for r in rows {
+        for (i, c) in r.iter().enumerate() {
+            if i >= desired.len() {
+                continue;
+            }
+            let len = c.chars().count() as u16;
+            if len > desired[i] {
+                desired[i] = len;
+            }
+        }
+    }
+    for d in &mut desired {
+        *d = (*d).clamp(min_w, max_w);
+    }
+    let spacing = n.saturating_sub(1) as u16;
+    let total: u16 = desired.iter().sum::<u16>() + spacing;
+    if total <= available {
+        return desired.iter().map(|d| Constraint::Length(*d)).collect();
+    }
+    // Too wide: shrink each column proportionally so the whole table fits.
+    let budget = available.saturating_sub(spacing);
+    let sumw: u64 = desired.iter().map(|d| *d as u64).sum();
+    desired
+        .iter()
+        .map(|d| {
+            let scaled = ((budget as u64) * (*d as u64) / sumw.max(1)) as u16;
+            Constraint::Length(scaled.max(2))
+        })
+        .collect()
 }
 
 /// Minimal JSON syntax highlighter producing styled lines.

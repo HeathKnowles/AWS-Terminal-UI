@@ -1,0 +1,44 @@
+name: build-and-release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build and release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: . 
+
+      - name: Build release binary
+        run: cargo build --release --locked
+
+      - name: Run tests
+        run: cargo test --locked
+
+      - name: Archive binary
+        run: |
+          tar -C target/release -czf aws-tui-${{ github.ref_name }}-x86_64-unknown-linux-gnu.tar.gz aws-tui
+          sha256sum aws-tui-${{ github.ref_name }}-x86_64-unknown-linux-gnu.tar.gz > aws-tui-${{ github.ref_name }}-x86_64-unknown-linux-gnu.tar.gz.sha256
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            aws-tui-${{ github.ref_name }}-x86_64-unknown-linux-gnu.tar.gz
+            aws-tui-${{ github.ref_name }}-x86_64-unknown-linux-gnu.tar.gz.sha256
+          generate_release_notes: true
