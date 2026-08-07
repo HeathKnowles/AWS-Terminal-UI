@@ -1,4 +1,5 @@
 pub mod audit;
+pub mod awsconfig;
 pub mod builder;
 pub mod index;
 pub mod loader;
