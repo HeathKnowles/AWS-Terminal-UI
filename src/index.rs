@@ -22,6 +22,8 @@ pub struct SearchRow {
     pub haystack: Utf32String,
     /// Fields reachable from this operation's output (for "grep" queries)
     pub output_fields: Vec<OutputField>,
+    /// Known input parameter CLI names, e.g. ["max-count", "image-id"]
+    pub input_params: Vec<String>,
 }
 
 pub struct SearchIndex {
@@ -42,6 +44,7 @@ impl SearchIndex {
                 operation: String::new(),
                 haystack: Utf32String::from(format!("{} {}", svc.cli_name, svc.full_name)),
                 output_fields: Vec::new(),
+                input_params: Vec::new(),
             });
             by_service.insert(svc.cli_name.clone(), rows.len() - 1);
             for op in &svc.ops {
@@ -49,16 +52,11 @@ impl SearchIndex {
                     kind: SearchKind::Operation,
                     service: svc.cli_name.clone(),
                     operation: op.cli_name.clone(),
-                    haystack: Utf32String::from(format!(
-                        "{} {}",
-                        svc.cli_name, op.cli_name
-                    )),
+                    haystack: Utf32String::from(format!("{} {}", svc.cli_name, op.cli_name)),
                     output_fields: op.output_fields.clone(),
+                    input_params: op.input.iter().map(|p| p.cli_name.clone()).collect(),
                 });
-                by_service_op.insert(
-                    (svc.cli_name.clone(), op.cli_name.clone()),
-                    rows.len() - 1,
-                );
+                by_service_op.insert((svc.cli_name.clone(), op.cli_name.clone()), rows.len() - 1);
             }
         }
         SearchIndex {
@@ -70,6 +68,7 @@ impl SearchIndex {
 
     /// Return (row_index, score) for rows matching `query`, best first.
     pub fn search(&self, query: &str, limit: usize) -> Vec<(usize, u32)> {
+        use std::cmp::Reverse;
         let mut matcher = Matcher::new(nucleo::Config::DEFAULT);
         let pattern = Pattern::parse(query, CaseMatching::Ignore, Normalization::Smart);
         let mut results: Vec<(usize, u32)> = self
@@ -82,7 +81,7 @@ impl SearchIndex {
                     .map(|score| (i, score))
             })
             .collect();
-        results.sort_by(|a, b| b.1.cmp(&a.1));
+        results.sort_by_key(|b| Reverse(b.1));
         results.truncate(limit);
         results
     }

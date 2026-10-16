@@ -17,7 +17,11 @@ pub struct Intent {
 
 impl Intent {
     pub fn argv(&self, aws_bin: &str) -> Vec<String> {
-        let mut args = vec![aws_bin.to_string(), self.service.clone(), self.operation.clone()];
+        let mut args = vec![
+            aws_bin.to_string(),
+            self.service.clone(),
+            self.operation.clone(),
+        ];
         if let Some(region) = &self.region {
             args.push("--region".to_string());
             args.push(region.clone());
@@ -78,7 +82,10 @@ pub fn resolve_natural(index: &SearchIndex, text: &str, region: &str, profile: &
     // Service hint: any whitespace-delimited token that matches a known service name.
     let tokens: Vec<String> = lower
         .split_whitespace()
-        .map(|t| t.trim_matches(|c: char| !c.is_ascii_alphanumeric()).to_string())
+        .map(|t| {
+            t.trim_matches(|c: char| !c.is_ascii_alphanumeric())
+                .to_string()
+        })
         .filter(|t| !t.is_empty())
         .collect();
     let service_hint = index
@@ -157,7 +164,10 @@ fn entity_starts_with(op_name: &str, token: &str) -> bool {
         return false;
     }
     let verb = parts[0];
-    if !matches!(verb, "describe" | "list" | "get" | "delete" | "create" | "update") {
+    if !matches!(
+        verb,
+        "describe" | "list" | "get" | "delete" | "create" | "update"
+    ) {
         return false;
     }
     let entity: String = parts[1..].join("-");
@@ -165,10 +175,9 @@ fn entity_starts_with(op_name: &str, token: &str) -> bool {
 }
 
 const STOP_WORDS: &[&str] = &[
-    "a", "an", "the", "me", "my", "give", "get", "show", "list", "current",
-    "aws", "please", "all", "of", "this", "that", "across", "for", "in",
-    "and", "or", "with", "to", "from", "you", "your", "i", "want", "need",
-    "me", "can", "would", "could", "help",
+    "a", "an", "the", "me", "my", "give", "get", "show", "list", "current", "aws", "please", "all",
+    "of", "this", "that", "across", "for", "in", "and", "or", "with", "to", "from", "you", "your",
+    "i", "want", "need", "me", "can", "would", "could", "help",
 ];
 
 /// Stem a noun token for field matching: "ids"->"id", "subnets"->"subnet",
@@ -204,10 +213,8 @@ pub fn find_by_fields(
     let mut scored: Vec<((String, String), i32)> = Vec::new();
     for row in &index.rows {
         if let crate::index::SearchKind::Operation = row.kind {
-            if let Some(s) = service_hint {
-                if row.service != s {
-                    continue;
-                }
+            if service_hint.is_some_and(|s| row.service != s) {
+                continue;
             }
             let mut score: i32 = 0;
             for ft in field_tokens {
@@ -248,7 +255,7 @@ pub fn find_by_fields(
             }
         }
     }
-    scored.sort_by(|a, b| b.1.cmp(&a.1));
+    scored.sort_by_key(|b| std::cmp::Reverse(b.1));
     scored.into_iter().map(|(k, _)| k).collect()
 }
 
@@ -273,16 +280,12 @@ fn default_query_for(
         })
         .filter(|(_, score)| *score > 0)
         .collect();
-    matching.sort_by(|a, b| b.1.cmp(&a.1));
+    matching.sort_by_key(|b| std::cmp::Reverse(b.1));
     matching.first().map(|(f, _)| f.path.clone())
 }
 
 /// Score a single op against field tokens — public for debugging/tests.
-pub fn score_op(
-    op_name: &str,
-    field_tokens: &[String],
-    has_field: &dyn Fn(&str) -> bool,
-) -> i32 {
+pub fn score_op(op_name: &str, field_tokens: &[String], has_field: &dyn Fn(&str) -> bool) -> i32 {
     let mut score: i32 = 0;
     for ft in field_tokens {
         if op_name_has_token(op_name, ft) {
@@ -308,7 +311,8 @@ pub fn score_op(
 }
 
 /// Validate that an intent references a real operation with known params.
-pub fn validate_intent(index: &SearchIndex, intent: &Intent) -> Result<(), String> {    if intent.service.is_empty() {
+pub fn validate_intent(index: &SearchIndex, intent: &Intent) -> Result<(), String> {
+    if intent.service.is_empty() {
         return Err("no service selected".to_string());
     }
     if intent.operation.is_empty() {
@@ -318,12 +322,28 @@ pub fn validate_intent(index: &SearchIndex, intent: &Intent) -> Result<(), Strin
         .get_operation(&intent.service, &intent.operation)
         .ok_or_else(|| format!("unknown operation {}.{}", intent.service, intent.operation))?;
     if let Some(q) = &intent.query {
-        // Basic sanity: query must compile under JMESPath (checked by runner);
-        // here we just ensure it's non-empty.
         if q.trim().is_empty() {
             return Err("empty query".to_string());
         }
-        let _ = row;
+        crate::runner::validate_query(q)?;
+    }
+    let mut seen = std::collections::HashSet::new();
+    for (name, value) in &intent.params {
+        if name.trim().is_empty() {
+            return Err("empty parameter name".to_string());
+        }
+        if !seen.insert(name) {
+            return Err(format!("duplicate parameter --{name}"));
+        }
+        if !row.input_params.iter().any(|p| p == name) {
+            return Err(format!(
+                "unknown parameter --{name} for {}.{}",
+                intent.service, intent.operation
+            ));
+        }
+        if value.trim().is_empty() {
+            return Err(format!("empty value for --{name}"));
+        }
     }
     Ok(())
 }
@@ -331,6 +351,132 @@ pub fn validate_intent(index: &SearchIndex, intent: &Intent) -> Result<(), Strin
 pub fn service_op_pairs(tree: &ServiceTree) -> Vec<(String, String)> {
     tree.services
         .iter()
-        .flat_map(|s| s.ops.iter().map(move |o| (s.cli_name.clone(), o.cli_name.clone())))
+        .flat_map(|s| {
+            s.ops
+                .iter()
+                .map(move |o| (s.cli_name.clone(), o.cli_name.clone()))
+        })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::index::{SearchIndex, SearchKind};
+    use nucleo::Utf32String;
+
+    fn test_index() -> SearchIndex {
+        let rows = vec![
+            SearchRowForTest::service("ec2"),
+            SearchRowForTest::operation("ec2", "describe-subnets", &["subnet-ids"], &[]),
+        ];
+        SearchIndex {
+            rows: rows
+                .into_iter()
+                .map(SearchRowForTest::into_row)
+                .collect::<Vec<_>>(),
+            by_service: [("ec2".to_string(), 0)].into_iter().collect(),
+            by_service_op: [(("ec2".to_string(), "describe-subnets".to_string()), 1)]
+                .into_iter()
+                .collect(),
+        }
+    }
+
+    struct SearchRowForTest {
+        kind: SearchKind,
+        service: String,
+        operation: String,
+        input_params: Vec<String>,
+    }
+
+    impl SearchRowForTest {
+        fn service(service: &str) -> Self {
+            Self {
+                kind: SearchKind::Service,
+                service: service.to_string(),
+                operation: String::new(),
+                input_params: Vec::new(),
+            }
+        }
+
+        fn operation(service: &str, operation: &str, inputs: &[&str], _outputs: &[&str]) -> Self {
+            Self {
+                kind: SearchKind::Operation,
+                service: service.to_string(),
+                operation: operation.to_string(),
+                input_params: inputs.iter().map(|s| s.to_string()).collect(),
+            }
+        }
+
+        fn into_row(self) -> crate::index::SearchRow {
+            crate::index::SearchRow {
+                kind: self.kind,
+                service: self.service.clone(),
+                operation: self.operation.clone(),
+                haystack: Utf32String::from(format!("{} {}", self.service, self.operation)),
+                output_fields: Vec::new(),
+                input_params: self.input_params,
+            }
+        }
+    }
+
+    #[test]
+    fn rejects_invalid_jmespath() {
+        let index = test_index();
+        let intent = Intent {
+            service: "ec2".to_string(),
+            operation: "describe-subnets".to_string(),
+            query: Some("Subnets[]..".to_string()),
+            ..Default::default()
+        };
+        assert!(validate_intent(&index, &intent).is_err());
+    }
+
+    #[test]
+    fn rejects_unknown_param() {
+        let index = test_index();
+        let intent = Intent {
+            service: "ec2".to_string(),
+            operation: "describe-subnets".to_string(),
+            params: vec![("bogus-param".to_string(), "x".to_string())],
+            ..Default::default()
+        };
+        let err = validate_intent(&index, &intent).unwrap_err();
+        assert!(err.contains("unknown parameter"), "got: {err}");
+    }
+
+    #[test]
+    fn rejects_duplicate_and_empty_params() {
+        let index = test_index();
+        let dup = Intent {
+            service: "ec2".to_string(),
+            operation: "describe-subnets".to_string(),
+            params: vec![
+                ("subnet-ids".to_string(), "a".to_string()),
+                ("subnet-ids".to_string(), "b".to_string()),
+            ],
+            ..Default::default()
+        };
+        assert!(validate_intent(&index, &dup).is_err());
+        let empty = Intent {
+            service: "ec2".to_string(),
+            operation: "describe-subnets".to_string(),
+            params: vec![("subnet-ids".to_string(), "  ".to_string())],
+            ..Default::default()
+        };
+        assert!(validate_intent(&index, &empty).is_err());
+    }
+
+    #[test]
+    fn accepts_known_param_and_valid_query() {
+        let index = test_index();
+        let intent = Intent {
+            service: "ec2".to_string(),
+            operation: "describe-subnets".to_string(),
+            params: vec![("subnet-ids".to_string(), "subnet-1".to_string())],
+            query: Some("Subnets[].SubnetId".to_string()),
+            ..Default::default()
+        };
+        assert!(validate_intent(&index, &intent).is_ok());
+    }
 }
