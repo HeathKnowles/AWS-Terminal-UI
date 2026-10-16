@@ -98,4 +98,4 @@ cargo test    # unit + integration tests
 
 ## License
 
-Unspecified.
+MIT. See [LICENSE](LICENSE).
