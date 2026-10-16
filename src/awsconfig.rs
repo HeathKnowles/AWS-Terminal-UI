@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// AWS regions known to be usable for the public AWS partition.
 pub const KNOWN_REGIONS: &[&str] = &[
@@ -60,7 +60,14 @@ pub fn aws_config_dir() -> PathBuf {
 /// Read `~/.aws/config` and `~/.aws/credentials` (if present) and return the
 /// profile names found in either, preserving order.
 pub fn discover_profiles() -> Vec<String> {
-    let dir = aws_config_dir();
+    discover_profiles_in(&aws_config_dir())
+}
+
+/// Testable variant that reads from an explicit directory.
+///
+/// This exists so tests don't have to mutate the global `HOME` environment
+/// variable (which is process-wide and racy under parallel test execution).
+pub fn discover_profiles_in(dir: &Path) -> Vec<String> {
     let mut profiles: Vec<String> = Vec::new();
     let mut seen = std::collections::HashSet::new();
 
@@ -102,10 +109,8 @@ fn parse_profile_names(text: &str) -> Vec<String> {
     names
 }
 
-/// Find the region configured for a profile: first `region =`, then
-/// `sso_region =`, in either config or credentials.
-fn profile_region(profile: &str) -> Option<String> {
-    let dir = aws_config_dir();
+/// Testable variant of profile-region lookup with an explicit config dir.
+pub fn profile_region_in(dir: &Path, profile: &str) -> Option<String> {
     for file in ["config", "credentials"] {
         let path = dir.join(file);
         let Ok(text) = std::fs::read_to_string(&path) else {
@@ -151,7 +156,22 @@ fn parse_region_for_profile(text: &str, target: &str) -> Option<String> {
 
 /// Resolve the active profile from AWS_PROFILE or the default.
 pub fn active_profile() -> String {
-    std::env::var("AWS_PROFILE").unwrap_or_else(|_| "default".to_string())
+    active_profile_from(&current_env_map())
+}
+
+/// Testable variant of [`active_profile`] that reads from a map.
+pub fn active_profile_from(env: &HashMap<String, String>) -> String {
+    env.get("AWS_PROFILE")
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "default".to_string())
+}
+
+fn current_env_map() -> HashMap<String, String> {
+    ["AWS_PROFILE", "AWS_REGION", "AWS_DEFAULT_REGION"]
+        .into_iter()
+        .filter_map(|k| std::env::var(k).ok().map(|v| (k.to_string(), v)))
+        .collect()
 }
 
 /// Resolve the active region. Precedence:
@@ -159,16 +179,29 @@ pub fn active_profile() -> String {
 /// 2. AWS_DEFAULT_REGION env
 /// 3. profile region in ~/.aws config
 /// 4. us-east-1 (AWS's own default)
+///
 /// Returns (region, source_description).
 pub fn detect_region(profile: &str) -> (String, String) {
-    for (env, label) in [("AWS_REGION", "env AWS_REGION"), ("AWS_DEFAULT_REGION", "env AWS_DEFAULT_REGION")] {
-        if let Ok(v) = std::env::var(env) {
-            if !v.trim().is_empty() {
-                return (v.trim().to_string(), label.to_string());
-            }
+    detect_region_with(&aws_config_dir(), &current_env_map(), profile)
+}
+
+/// Testable variant of [`detect_region`] with explicit inputs.
+pub fn detect_region_with(
+    config_dir: &Path,
+    env: &HashMap<String, String>,
+    profile: &str,
+) -> (String, String) {
+    for (key, label) in [
+        ("AWS_REGION", "env AWS_REGION"),
+        ("AWS_DEFAULT_REGION", "env AWS_DEFAULT_REGION"),
+    ] {
+        if let Some(v) = env.get(key)
+            && !v.trim().is_empty()
+        {
+            return (v.trim().to_string(), label.to_string());
         }
     }
-    if let Some(r) = profile_region(profile) {
+    if let Some(r) = profile_region_in(config_dir, profile) {
         return (r, format!("profile '{profile}' region"));
     }
     ("us-east-1".to_string(), "default".to_string())
@@ -177,21 +210,28 @@ pub fn detect_region(profile: &str) -> (String, String) {
 /// Build the full environment: available profiles, known regions merged with
 /// any config regions, and the active profile/region defaults.
 pub fn build_environment() -> AwsEnvironment {
-    let mut profiles = discover_profiles();
+    build_environment_with(&aws_config_dir(), &current_env_map())
+}
+
+/// Testable variant of [`build_environment`] that takes explicit inputs
+/// instead of reading global process state.
+pub fn build_environment_with(config_dir: &Path, env: &HashMap<String, String>) -> AwsEnvironment {
+    let mut profiles = discover_profiles_in(config_dir);
     profiles.sort();
-    let active_profile = if profiles.contains(&active_profile()) {
-        active_profile()
+    let wanted = active_profile_from(env);
+    let active_profile = if profiles.contains(&wanted) {
+        wanted
     } else {
         profiles[0].clone()
     };
-    let (active_region, region_source) = detect_region(&active_profile);
+    let (active_region, region_source) = detect_region_with(config_dir, env, &active_profile);
 
     let mut regions: Vec<String> = Vec::new();
     for p in &profiles {
-        if let Some(r) = profile_region(p) {
-            if !regions.contains(&r) {
-                regions.push(r);
-            }
+        if let Some(r) = profile_region_in(config_dir, p)
+            && !regions.contains(&r)
+        {
+            regions.push(r);
         }
     }
     for r in KNOWN_REGIONS {
@@ -215,10 +255,10 @@ pub fn build_environment() -> AwsEnvironment {
 /// Merge a new "env override" map of region sources, kept for tests/debugging.
 pub fn region_from_env_map(map: &HashMap<String, String>) -> Option<String> {
     for k in ["AWS_REGION", "AWS_DEFAULT_REGION"] {
-        if let Some(v) = map.get(k) {
-            if !v.trim().is_empty() {
-                return Some(v.trim().to_string());
-            }
+        if let Some(v) = map.get(k)
+            && !v.trim().is_empty()
+        {
+            return Some(v.trim().to_string());
         }
     }
     None
@@ -238,16 +278,28 @@ mod tests {
     #[test]
     fn parses_region_for_profile() {
         let text = "\n[default]\nregion = us-east-1\n\n[profile dev]\nregion = eu-west-1\n\n[profile sso]\nsso_region = ap-south-1\n";
-        assert_eq!(parse_region_for_profile(text, "dev"), Some("eu-west-1".to_string()));
-        assert_eq!(parse_region_for_profile(text, "sso"), Some("ap-south-1".to_string()));
-        assert_eq!(parse_region_for_profile(text, "default"), Some("us-east-1".to_string()));
+        assert_eq!(
+            parse_region_for_profile(text, "dev"),
+            Some("eu-west-1".to_string())
+        );
+        assert_eq!(
+            parse_region_for_profile(text, "sso"),
+            Some("ap-south-1".to_string())
+        );
+        assert_eq!(
+            parse_region_for_profile(text, "default"),
+            Some("us-east-1".to_string())
+        );
         assert_eq!(parse_region_for_profile(text, "nope"), None);
     }
 
     #[test]
     fn credentials_bare_sections_work() {
         let text = "\n[default]\naws_access_key_id = x\n\n[dev]\nregion = eu-central-1\n";
-        assert_eq!(parse_region_for_profile(text, "dev"), Some("eu-central-1".to_string()));
+        assert_eq!(
+            parse_region_for_profile(text, "dev"),
+            Some("eu-central-1".to_string())
+        );
     }
 
     #[test]
@@ -261,7 +313,17 @@ mod tests {
 
     #[test]
     fn build_environment_uses_fake_home() {
-        let tmp = std::env::temp_dir().join(format!("aws-tui-test-{}", std::process::id()));
+        // No global env mutation: use an isolated config dir + env map.
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let tmp = std::env::temp_dir().join(format!(
+            "aws-tui-test-{}-{}-{:?}",
+            std::process::id(),
+            nanos,
+            std::thread::current().id()
+        ));
         let aws = tmp.join(".aws");
         std::fs::create_dir_all(&aws).unwrap();
         std::fs::write(
@@ -269,17 +331,35 @@ mod tests {
             "[default]\nregion = us-east-1\n\n[profile dev]\nregion = eu-west-1\n",
         )
         .unwrap();
-        unsafe {
-            std::env::set_var("HOME", &tmp);
-            std::env::remove_var("AWS_PROFILE");
-            std::env::remove_var("AWS_REGION");
-            std::env::remove_var("AWS_DEFAULT_REGION");
-        }
-        let env = build_environment();
-        assert!(env.profiles.contains(&"dev".to_string()));
-        assert!(env.regions.contains(&"eu-west-1".to_string()));
+        let env = HashMap::new();
+        let built = build_environment_with(&aws, &env);
+        assert!(built.profiles.contains(&"dev".to_string()));
+        assert!(built.regions.contains(&"eu-west-1".to_string()));
         // default profile region is us-east-1
-        assert_eq!(env.active_region, "us-east-1");
+        assert_eq!(built.active_region, "us-east-1");
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn env_map_overrides_profile_region() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let tmp = std::env::temp_dir().join(format!(
+            "aws-tui-test-env-{}-{}-{:?}",
+            std::process::id(),
+            nanos,
+            std::thread::current().id()
+        ));
+        let aws = tmp.join(".aws");
+        std::fs::create_dir_all(&aws).unwrap();
+        std::fs::write(aws.join("config"), "[default]\nregion = us-east-1\n").unwrap();
+        let mut env = HashMap::new();
+        env.insert("AWS_REGION".to_string(), "eu-central-1".to_string());
+        let built = build_environment_with(&aws, &env);
+        assert_eq!(built.active_region, "eu-central-1");
+        assert_eq!(built.region_source, "env AWS_REGION");
         let _ = std::fs::remove_dir_all(&tmp);
     }
 }
