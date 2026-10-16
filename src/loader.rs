@@ -76,12 +76,20 @@ pub fn default_data_dir() -> Option<PathBuf> {
     }
     // Fall back to the sibling aws-cli checkout.
     if let Ok(cwd) = std::env::current_dir() {
-        let candidate = cwd.join("aws-cli").join("awscli").join("botocore").join("data");
+        let candidate = cwd
+            .join("aws-cli")
+            .join("awscli")
+            .join("botocore")
+            .join("data");
         if candidate.is_dir() {
             return Some(candidate);
         }
         for ancestor in cwd.ancestors() {
-            let candidate = ancestor.join("aws-cli").join("awscli").join("botocore").join("data");
+            let candidate = ancestor
+                .join("aws-cli")
+                .join("awscli")
+                .join("botocore")
+                .join("data");
             if candidate.is_dir() {
                 return Some(candidate);
             }
@@ -137,14 +145,18 @@ pub fn discover_models(data_dir: &Path) -> Vec<(PathBuf, String, String)> {
 }
 
 /// Load and parse every service model in parallel, returning a ServiceTree.
+///
+/// Models that fail to read or parse are skipped with a diagnostic on
+/// stderr; previously they silently produced empty entries.
 pub fn load_services(data_dir: &Path, cli_version: &str) -> ServiceTree {
     let models = discover_models(data_dir);
-    let services: Vec<ServiceEntry> = models
+    let mut services: Vec<ServiceEntry> = models
         .par_iter()
-        .map(|(path, service_name, api_version)| {
+        .filter_map(|(path, service_name, api_version)| {
             load_service(path, service_name, api_version, cli_version)
         })
         .collect();
+    services.sort_by(|a, b| a.cli_name.cmp(&b.cli_name));
     ServiceTree { services }
 }
 
@@ -166,14 +178,29 @@ fn load_service(
     service_name: &str,
     api_version: &str,
     cli_version: &str,
-) -> ServiceEntry {
-    let raw = std::fs::read_to_string(path).unwrap_or_default();
-    let model: ServiceModel = serde_json::from_str(&raw).unwrap_or_else(|_| ServiceModel {
-        version: String::new(),
-        metadata: Default::default(),
-        operations: Default::default(),
-        shapes: Default::default(),
-    });
+) -> Option<ServiceEntry> {
+    let raw = match std::fs::read_to_string(path) {
+        Ok(raw) => raw,
+        Err(e) => {
+            eprintln!(
+                "skipping {}: failed to read {}: {e}",
+                service_name,
+                path.display()
+            );
+            return None;
+        }
+    };
+    let model: ServiceModel = match serde_json::from_str(&raw) {
+        Ok(model) => model,
+        Err(e) => {
+            eprintln!(
+                "skipping {}: failed to parse {}: {e}",
+                service_name,
+                path.display()
+            );
+            return None;
+        }
+    };
 
     let mut ops: Vec<OpEntry> = model
         .operations
@@ -182,7 +209,7 @@ fn load_service(
         .collect();
     ops.sort_by(|a, b| a.cli_name.cmp(&b.cli_name));
 
-    ServiceEntry {
+    Some(ServiceEntry {
         cli_name: service_name.to_string(),
         full_name: model.metadata.service_full_name.clone(),
         service_id: model.metadata.service_id.clone(),
@@ -193,7 +220,7 @@ fn load_service(
             model_sha256: sha256_file(path),
             api_version: api_version.to_string(),
         },
-    }
+    })
 }
 
 fn build_op(api_name: &str, op: &Operation, model: &ServiceModel) -> OpEntry {
@@ -216,7 +243,7 @@ fn build_input_params(op: &Operation, model: &ServiceModel) -> Vec<InputParam> {
     let Some(shape) = model.shapes.get(&input.shape) else {
         return Vec::new();
     };
-    let required = shape.required.iter().cloned().collect::<Vec<_>>();
+    let required = shape.required.to_vec();
     let mut params = Vec::new();
     for (member_name, member) in &shape.members {
         let type_info = resolve_type(&member.shape, model);
@@ -351,7 +378,14 @@ fn walk_output_inner(
         }
         "map" => {
             if let Some(value) = &shape.value {
-                walk_output_inner(&value.shape, model, segments, _parent_is_list, fields, depth + 1);
+                walk_output_inner(
+                    &value.shape,
+                    model,
+                    segments,
+                    _parent_is_list,
+                    fields,
+                    depth + 1,
+                );
             }
         }
         "structure" => {
@@ -391,10 +425,10 @@ fn push_member(
         .get(&member.shape)
         .map(|s| s.type_name == "list")
         .unwrap_or(false);
-    if let Some(last) = segments.last_mut() {
-        if is_list {
-            last.1 = true;
-        }
+    if let Some(last) = segments.last_mut()
+        && is_list
+    {
+        last.1 = true;
     }
     walk_output_inner(&member.shape, model, segments, is_list, fields, depth + 1);
 }
@@ -437,7 +471,11 @@ mod tests {
         // Tests run from the crate dir; look upward for aws-cli.
         let cwd = std::env::current_dir().unwrap();
         for ancestor in cwd.ancestors() {
-            let cand = ancestor.join("aws-cli").join("awscli").join("botocore").join("data");
+            let cand = ancestor
+                .join("aws-cli")
+                .join("awscli")
+                .join("botocore")
+                .join("data");
             if cand.is_dir() {
                 return cand;
             }
@@ -449,7 +487,11 @@ mod tests {
     fn parses_ec2() {
         let dir = find_repo();
         let tree = load_services(&dir, "2.36.18");
-        let ec2 = tree.services.iter().find(|s| s.cli_name == "ec2").expect("ec2 present");
+        let ec2 = tree
+            .services
+            .iter()
+            .find(|s| s.cli_name == "ec2")
+            .expect("ec2 present");
         let subnets = ec2
             .ops
             .iter()
@@ -477,11 +519,23 @@ mod tests {
         let dir = find_repo();
         let tree = load_services(&dir, "2.36.18");
         let ec2 = tree.services.iter().find(|s| s.cli_name == "ec2").unwrap();
-        let run = ec2.ops.iter().find(|o| o.cli_name == "run-instances").unwrap();
-        let max_count = run.input.iter().find(|p| p.cli_name == "max-count").expect("max-count");
+        let run = ec2
+            .ops
+            .iter()
+            .find(|o| o.cli_name == "run-instances")
+            .unwrap();
+        let max_count = run
+            .input
+            .iter()
+            .find(|p| p.cli_name == "max-count")
+            .expect("max-count");
         assert!(max_count.required);
         assert_eq!(max_count.type_name, "integer");
-        let image = run.input.iter().find(|p| p.cli_name == "image-id").expect("image-id");
+        let image = run
+            .input
+            .iter()
+            .find(|p| p.cli_name == "image-id")
+            .expect("image-id");
         assert_eq!(image.type_name, "string");
     }
 
@@ -489,6 +543,10 @@ mod tests {
     fn service_count_sane() {
         let dir = find_repo();
         let tree = load_services(&dir, "2.36.18");
-        assert!(tree.services.len() > 300, "expected many services, got {}", tree.services.len());
+        assert!(
+            tree.services.len() > 300,
+            "expected many services, got {}",
+            tree.services.len()
+        );
     }
 }
