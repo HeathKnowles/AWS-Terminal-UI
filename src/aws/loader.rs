@@ -4,12 +4,12 @@ use rayon::prelude::*;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
-use crate::model::{Member, Operation, ServiceModel};
-use crate::xform::xform_name;
+use crate::aws::model::{Member, Operation, ServiceModel};
+use crate::aws::xform::xform_name;
 
 pub const DATA_DIR_ENV: &str = "AWS_TUI_DATA_DIR";
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, serde::Deserialize)]
 pub struct Provenance {
     pub cli_version: String,
     pub model_path: String,
@@ -17,7 +17,7 @@ pub struct Provenance {
     pub api_version: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, serde::Deserialize)]
 pub struct InputParam {
     pub cli_name: String,
     pub api_name: String,
@@ -30,7 +30,7 @@ pub struct InputParam {
     pub docs: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, serde::Deserialize)]
 pub struct OutputField {
     /// JMESPath path from the output root, e.g. "Subnets[].SubnetId"
     pub path: String,
@@ -42,7 +42,7 @@ pub struct OutputField {
     pub is_list_leaf: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, serde::Deserialize)]
 pub struct OpEntry {
     pub cli_name: String,
     pub api_name: String,
@@ -52,7 +52,7 @@ pub struct OpEntry {
     pub output_shape_name: Option<String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, serde::Deserialize)]
 pub struct ServiceEntry {
     /// CLI service name, e.g. "ec2"
     pub cli_name: String,
@@ -62,7 +62,7 @@ pub struct ServiceEntry {
     pub provenance: Provenance,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, serde::Deserialize)]
 pub struct ServiceTree {
     pub services: Vec<ServiceEntry>,
 }
@@ -158,6 +158,65 @@ pub fn load_services(data_dir: &Path, cli_version: &str) -> ServiceTree {
         .collect();
     services.sort_by(|a, b| a.cli_name.cmp(&b.cli_name));
     ServiceTree { services }
+}
+
+/// Cached variant of [`load_services`].
+///
+/// The parsed tree is stored as JSON under the platform cache dir, keyed by
+/// a fingerprint of the CLI version plus every model path, size, and mtime.
+/// Stale or unreadable caches fall back to a full parse; cache writes are
+/// best-effort and never fail startup.
+pub fn load_services_cached(data_dir: &Path, cli_version: &str) -> ServiceTree {
+    let models = discover_models(data_dir);
+    let fingerprint = cache_fingerprint(&models, cli_version);
+    if let Some(dir) = cache_dir() {
+        let path = dir.join(format!("models-{fingerprint}.json"));
+        if let Ok(bytes) = std::fs::read(&path)
+            && let Ok(tree) = serde_json::from_slice::<ServiceTree>(&bytes)
+            && !tree.services.is_empty()
+        {
+            return tree;
+        }
+        let tree = load_services(data_dir, cli_version);
+        if !tree.services.is_empty()
+            && std::fs::create_dir_all(&dir).is_ok()
+            && let Ok(bytes) = serde_json::to_vec(&tree)
+        {
+            let _ = std::fs::write(&path, bytes);
+        }
+        return tree;
+    }
+    load_services(data_dir, cli_version)
+}
+
+pub fn cache_dir() -> Option<PathBuf> {
+    dirs::cache_dir().map(|d| d.join("aws-tui"))
+}
+
+fn cache_fingerprint(models: &[(PathBuf, String, String)], cli_version: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(cli_version.as_bytes());
+    let mut sorted: Vec<(&PathBuf, &String, &String)> =
+        models.iter().map(|(p, s, v)| (p, s, v)).collect();
+    sorted.sort_by(|a, b| a.0.cmp(b.0));
+    for (path, service, api_version) in sorted {
+        hasher.update(path.to_string_lossy().as_bytes());
+        hasher.update(service.as_bytes());
+        hasher.update(api_version.as_bytes());
+        if let Ok(meta) = std::fs::metadata(path) {
+            hasher.update(meta.len().to_le_bytes());
+            if let Ok(mtime) = meta.modified()
+                && let Ok(d) = mtime.duration_since(std::time::UNIX_EPOCH)
+            {
+                hasher.update(d.as_secs().to_le_bytes());
+            }
+        }
+    }
+    hasher
+        .finalize()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
 }
 
 fn sha256_file(path: &Path) -> String {
@@ -548,5 +607,21 @@ mod tests {
             "expected many services, got {}",
             tree.services.len()
         );
+    }
+
+    #[test]
+    fn cached_load_matches_fresh_parse() {
+        let dir = find_repo();
+        let fresh = load_services(&dir, "2.36.18");
+        let cached = load_services_cached(&dir, "2.36.18");
+        assert_eq!(cached.services.len(), fresh.services.len());
+        // Second call must hit the cache file on disk.
+        let cache_files: Vec<_> = cache_dir()
+            .into_iter()
+            .flat_map(|d| std::fs::read_dir(d).ok())
+            .flatten()
+            .flatten()
+            .collect();
+        assert!(!cache_files.is_empty());
     }
 }

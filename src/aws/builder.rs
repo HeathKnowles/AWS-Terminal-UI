@@ -1,5 +1,5 @@
-use crate::index::SearchIndex;
-use crate::loader::ServiceTree;
+use crate::aws::index::SearchIndex;
+use crate::aws::loader::ServiceTree;
 
 #[derive(Debug, Clone, Default)]
 pub struct Intent {
@@ -13,6 +13,9 @@ pub struct Intent {
     pub output: Option<String>,
     pub region: Option<String>,
     pub profile: Option<String>,
+    /// CLI pagination controls (`--max-items`, `--page-size`).
+    pub max_items: Option<String>,
+    pub page_size: Option<String>,
 }
 
 impl Intent {
@@ -42,12 +45,29 @@ impl Intent {
             args.push("--output".to_string());
             args.push(o.clone());
         }
+        if let Some(m) = &self.max_items {
+            args.push("--max-items".to_string());
+            args.push(m.clone());
+        }
+        if let Some(p) = &self.page_size {
+            args.push("--page-size".to_string());
+            args.push(p.clone());
+        }
         args.push("--no-cli-pager".to_string());
         args
     }
 
     pub fn command_line(&self, aws_bin: &str) -> String {
-        let argv = self.argv(aws_bin);
+        Self::join_argv(&self.argv(aws_bin))
+    }
+
+    /// Command line with secret-looking param values replaced by `***`.
+    /// Use for all on-screen display; the audit log keeps full values.
+    pub fn masked_command_line(&self, aws_bin: &str) -> String {
+        Self::join_argv(&self.masked_argv(aws_bin))
+    }
+
+    fn join_argv(argv: &[String]) -> String {
         let mut out = String::new();
         for (i, arg) in argv.iter().enumerate() {
             if i > 0 {
@@ -63,6 +83,71 @@ impl Intent {
         }
         out
     }
+
+    fn masked_argv(&self, aws_bin: &str) -> Vec<String> {
+        let mut args = vec![
+            aws_bin.to_string(),
+            self.service.clone(),
+            self.operation.clone(),
+        ];
+        if let Some(region) = &self.region {
+            args.push("--region".to_string());
+            args.push(region.clone());
+        }
+        if let Some(profile) = &self.profile {
+            args.push("--profile".to_string());
+            args.push(profile.clone());
+        }
+        for (k, v) in &self.params {
+            args.push(format!("--{}", k));
+            args.push(if is_sensitive_param(k) {
+                "***".to_string()
+            } else {
+                v.clone()
+            });
+        }
+        if let Some(q) = &self.query {
+            args.push("--query".to_string());
+            args.push(q.clone());
+        }
+        if let Some(o) = &self.output {
+            args.push("--output".to_string());
+            args.push(o.clone());
+        }
+        if let Some(m) = &self.max_items {
+            args.push("--max-items".to_string());
+            args.push(m.clone());
+        }
+        if let Some(p) = &self.page_size {
+            args.push("--page-size".to_string());
+            args.push(p.clone());
+        }
+        args.push("--no-cli-pager".to_string());
+        args
+    }
+}
+
+/// Param names containing one of these substrings hold secrets. Values are
+/// masked in on-screen command previews; the local audit log keeps them.
+const SENSITIVE_SUBSTRINGS: &[&str] = &[
+    "password",
+    "passwd",
+    "secret",
+    "token",
+    "api-key",
+    "api_key",
+    "apikey",
+    "private-key",
+    "privatekey",
+    "passphrase",
+    "access-key",
+    "secret-key",
+    "session-token",
+];
+
+pub fn is_sensitive_param(name: &str) -> bool {
+    let lower = name.to_lowercase();
+    SENSITIVE_SUBSTRINGS.iter().any(|s| lower.contains(s))
 }
 
 /// Resolve a natural-language intent string into a candidate Intent.
@@ -212,7 +297,7 @@ pub fn find_by_fields(
 ) -> Vec<(String, String)> {
     let mut scored: Vec<((String, String), i32)> = Vec::new();
     for row in &index.rows {
-        if let crate::index::SearchKind::Operation = row.kind {
+        if let crate::aws::index::SearchKind::Operation = row.kind {
             if service_hint.is_some_and(|s| row.service != s) {
                 continue;
             }
@@ -268,7 +353,7 @@ fn default_query_for(
 ) -> Option<String> {
     let row = index.get_operation(service, operation)?;
     // Score fields by how many tokens match; prefer the most specific match.
-    let mut matching: Vec<(&crate::loader::OutputField, usize)> = row
+    let mut matching: Vec<(&crate::aws::loader::OutputField, usize)> = row
         .output_fields
         .iter()
         .map(|f| {
@@ -325,7 +410,17 @@ pub fn validate_intent(index: &SearchIndex, intent: &Intent) -> Result<(), Strin
         if q.trim().is_empty() {
             return Err("empty query".to_string());
         }
-        crate::runner::validate_query(q)?;
+        crate::aws::runner::validate_query(q)?;
+    }
+    for (label, value) in [
+        ("--max-items", &intent.max_items),
+        ("--page-size", &intent.page_size),
+    ] {
+        if let Some(v) = value
+            && v.trim().parse::<u64>().ok().filter(|n| *n > 0).is_none()
+        {
+            return Err(format!("{label} must be a positive integer"));
+        }
     }
     let mut seen = std::collections::HashSet::new();
     for (name, value) in &intent.params {
@@ -362,7 +457,7 @@ pub fn service_op_pairs(tree: &ServiceTree) -> Vec<(String, String)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::index::{SearchIndex, SearchKind};
+    use crate::aws::index::{SearchIndex, SearchKind};
     use nucleo::Utf32String;
 
     fn test_index() -> SearchIndex {
@@ -408,8 +503,8 @@ mod tests {
             }
         }
 
-        fn into_row(self) -> crate::index::SearchRow {
-            crate::index::SearchRow {
+        fn into_row(self) -> crate::aws::index::SearchRow {
+            crate::aws::index::SearchRow {
                 kind: self.kind,
                 service: self.service.clone(),
                 operation: self.operation.clone(),
@@ -478,5 +573,47 @@ mod tests {
             ..Default::default()
         };
         assert!(validate_intent(&index, &intent).is_ok());
+    }
+
+    #[test]
+    fn paging_argv_and_validation() {
+        let mut intent = Intent {
+            service: "ec2".to_string(),
+            operation: "describe-subnets".to_string(),
+            ..Default::default()
+        };
+        assert!(validate_intent(&test_index(), &intent).is_ok());
+        intent.max_items = Some("10".to_string());
+        intent.page_size = Some("5".to_string());
+        assert!(validate_intent(&test_index(), &intent).is_ok());
+        let argv = intent.argv("aws");
+        assert!(argv.contains(&"--max-items".to_string()));
+        assert!(argv.contains(&"--page-size".to_string()));
+        intent.max_items = Some("0".to_string());
+        assert!(validate_intent(&test_index(), &intent).is_err());
+        intent.max_items = Some("abc".to_string());
+        assert!(validate_intent(&test_index(), &intent).is_err());
+    }
+
+    #[test]
+    fn secrets_mask_in_display_only() {
+        assert!(is_sensitive_param("db-password"));
+        assert!(is_sensitive_param("Token"));
+        assert!(!is_sensitive_param("subnet-ids"));
+        let intent = Intent {
+            service: "rds".to_string(),
+            operation: "create-db-instance".to_string(),
+            params: vec![
+                ("db-instance-identifier".to_string(), "mydb".to_string()),
+                ("master-user-password".to_string(), "s3cret".to_string()),
+            ],
+            ..Default::default()
+        };
+        let shown = intent.masked_command_line("aws");
+        assert!(shown.contains("mydb"));
+        assert!(!shown.contains("s3cret"));
+        assert!(shown.contains("***"));
+        // Full command line (used for execution, not display) is intact.
+        assert!(intent.command_line("aws").contains("s3cret"));
     }
 }

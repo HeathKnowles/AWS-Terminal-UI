@@ -1,9 +1,9 @@
 use std::path::PathBuf;
 
-use aws_tui::builder::resolve_natural;
-use aws_tui::index::SearchIndex;
-use aws_tui::loader::{default_data_dir, load_services};
-use aws_tui::runner::apply_query;
+use aws_tui::aws::builder::resolve_natural;
+use aws_tui::aws::index::SearchIndex;
+use aws_tui::aws::loader::{default_data_dir, load_services};
+use aws_tui::aws::runner::apply_query;
 
 fn find_repo() -> PathBuf {
     if let Some(dir) = default_data_dir() {
@@ -62,8 +62,8 @@ fn follow_up_requery_on_cached_result() {
 
 #[test]
 fn validate_query_rejects_bad_jmespath() {
-    assert!(aws_tui::runner::validate_query("Subnets[]..").is_err());
-    assert!(aws_tui::runner::validate_query("Subnets[].SubnetId").is_ok());
+    assert!(aws_tui::aws::runner::validate_query("Subnets[]..").is_err());
+    assert!(aws_tui::aws::runner::validate_query("Subnets[].SubnetId").is_ok());
 }
 
 #[test]
@@ -72,14 +72,14 @@ fn ops_without_query_are_valid() {
     let dir = find_repo();
     let tree = load_services(&dir, "2.36.18");
     let index = SearchIndex::build(&tree);
-    let intent = aws_tui::builder::Intent {
+    let intent = aws_tui::aws::builder::Intent {
         service: "sts".to_string(),
         operation: "get-caller-identity".to_string(),
         region: Some("us-east-1".to_string()),
         profile: Some("dev".to_string()),
         ..Default::default()
     };
-    assert!(aws_tui::builder::validate_intent(&index, &intent).is_ok());
+    assert!(aws_tui::aws::builder::validate_intent(&index, &intent).is_ok());
     // And the argv builds without a --query flag.
     let argv = intent.argv("aws");
     assert!(!argv.iter().any(|a| a == "--query"));

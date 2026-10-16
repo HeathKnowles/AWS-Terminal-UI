@@ -1,8 +1,4 @@
-pub mod audit;
-pub mod awsconfig;
-pub mod builder;
-pub mod index;
-pub mod loader;
-pub mod model;
-pub mod runner;
-pub mod xform;
+pub mod aws;
+pub mod config;
+pub mod ops;
+pub mod tui;

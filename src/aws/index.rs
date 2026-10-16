@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use nucleo::pattern::{CaseMatching, Normalization, Pattern};
 use nucleo::{Matcher, Utf32String};
 
-use crate::loader::{OutputField, ServiceTree};
+use crate::aws::loader::{OutputField, ServiceTree};
 
 #[derive(Debug, Clone)]
 pub enum SearchKind {
