@@ -41,19 +41,30 @@ pub struct ResultSnapshot {
     pub error: Option<String>,
 }
 
+/// Outcome of a command execution, bundled so [`AuditLogger::executed`]
+/// stays under the argument-count lint.
+#[derive(Debug, Clone)]
+pub struct ExecutionOutcome {
+    pub exit_code: i32,
+    pub duration_ms: u64,
+    pub output_sha256: String,
+    pub error: Option<String>,
+}
+
 pub struct AuditLogger {
     path: PathBuf,
     seq: u64,
     session_id: String,
     user: String,
     host: String,
+    aws_bin: String,
 }
 
 impl AuditLogger {
-    pub fn new(base_dir: &PathBuf) -> Result<Self, String> {
+    pub fn new(base_dir: &PathBuf, aws_bin: impl Into<String>) -> Result<Self, String> {
         fs::create_dir_all(base_dir).map_err(|e| e.to_string())?;
         let path = base_dir.join("audit.jsonl");
-        let session_id = format!("{}", uuid_like());
+        let session_id = uuid_like().to_string();
         let user = std::env::var("USER").unwrap_or_else(|_| "unknown".to_string());
         let host = std::env::var("HOSTNAME")
             .or_else(|_| std::env::var("COMPUTERNAME"))
@@ -64,6 +75,7 @@ impl AuditLogger {
             session_id,
             user,
             host,
+            aws_bin: aws_bin.into(),
         })
     }
 
@@ -81,7 +93,11 @@ impl AuditLogger {
                 return;
             }
         };
-        if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(&self.path) {
+        if let Ok(mut f) = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&self.path)
+        {
             let _ = writeln!(f, "{line}");
         }
     }
@@ -98,7 +114,7 @@ impl AuditLogger {
                 user: self.user.clone(),
                 host: self.host.clone(),
                 intent: intent_snapshot(intent, source),
-                argv: intent.argv("aws"),
+                argv: intent.argv(&self.aws_bin),
                 provenance: provenance.clone(),
                 reference: None,
                 result: None,
@@ -112,10 +128,8 @@ impl AuditLogger {
         intent: &Intent,
         provenance: &Provenance,
         source: &str,
-        exit_code: i32,
-        duration_ms: u64,
-        output_sha256: String,
-        error: Option<String>,
+        outcome: ExecutionOutcome,
+        reference: Option<u64>,
     ) {
         self.record(
             "command_executed",
@@ -127,14 +141,14 @@ impl AuditLogger {
                 user: self.user.clone(),
                 host: self.host.clone(),
                 intent: intent_snapshot(intent, source),
-                argv: intent.argv("aws"),
+                argv: intent.argv(&self.aws_bin),
                 provenance: provenance.clone(),
-                reference: None,
+                reference,
                 result: Some(ResultSnapshot {
-                    exit_code,
-                    duration_ms,
-                    output_sha256,
-                    error,
+                    exit_code: outcome.exit_code,
+                    duration_ms: outcome.duration_ms,
+                    output_sha256: outcome.output_sha256,
+                    error: outcome.error,
                 }),
             },
         );
@@ -159,4 +173,65 @@ fn uuid_like() -> String {
         .map(|d| d.subsec_nanos())
         .unwrap_or(0);
     format!("{:08x}{:08x}", std::process::id(), nanos)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_intent() -> Intent {
+        Intent {
+            service: "ec2".to_string(),
+            operation: "describe-subnets".to_string(),
+            ..Default::default()
+        }
+    }
+
+    fn test_provenance() -> Provenance {
+        Provenance {
+            cli_version: "test".to_string(),
+            model_path: "ec2/2016-11-15/service-2.json".to_string(),
+            model_sha256: "abc".to_string(),
+            api_version: "2016-11-15".to_string(),
+        }
+    }
+
+    #[test]
+    fn propose_links_to_executed_via_reference() {
+        let dir = std::env::temp_dir().join(format!(
+            "aws-tui-audit-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .subsec_nanos()
+        ));
+        let mut logger = AuditLogger::new(&dir, "my-aws").unwrap();
+        let intent = test_intent();
+        let prov = test_provenance();
+        let seq = logger.propose(&intent, &prov, "test");
+        logger.executed(
+            &intent,
+            &prov,
+            "test",
+            ExecutionOutcome {
+                exit_code: 0,
+                duration_ms: 1,
+                output_sha256: "deadbeef".to_string(),
+                error: None,
+            },
+            Some(seq),
+        );
+        let text = std::fs::read_to_string(dir.join("audit.jsonl")).unwrap();
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(lines.len(), 2);
+        let proposed: serde_json::Value = serde_json::from_str(lines[0]).unwrap();
+        let executed: serde_json::Value = serde_json::from_str(lines[1]).unwrap();
+        assert_eq!(proposed["seq"], seq);
+        assert_eq!(executed["reference"], seq);
+        // Custom binary must be used, not hardcoded "aws".
+        assert_eq!(proposed["argv"][0], "my-aws");
+        assert_eq!(executed["argv"][0], "my-aws");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

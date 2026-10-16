@@ -4,8 +4,10 @@ use aws_tui::audit::AuditLogger;
 use aws_tui::awsconfig::build_environment;
 use aws_tui::index::SearchIndex;
 use aws_tui::loader::{default_data_dir, load_services};
-use crossterm::terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen};
 use crossterm::ExecutableCommand;
+use crossterm::terminal::{
+    EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
+};
 use ratatui::prelude::CrosstermBackend;
 
 mod app;
@@ -13,10 +15,11 @@ mod jsonview;
 mod theme;
 mod ui;
 
-use app::{run_tui, App, CLI_VERSION};
+use app::{App, CLI_VERSION, run_tui};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let data_dir = default_data_dir().ok_or("aws-cli botocore data dir not found; set AWS_TUI_DATA_DIR")?;
+    let data_dir =
+        default_data_dir().ok_or("aws-cli botocore data dir not found; set AWS_TUI_DATA_DIR")?;
     let tree = load_services(&data_dir, CLI_VERSION);
     if tree.services.is_empty() {
         eprintln!("no services loaded from {}", data_dir.display());
@@ -45,9 +48,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let index = SearchIndex::build(&tree);
-    let base = dirs::data_dir().unwrap_or_else(|| PathBuf::from(".")).join("aws-tui");
-    let audit = AuditLogger::new(&base)?;
+    let base = dirs::data_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("aws-tui");
     let aws_bin = std::env::var("AWS_TUI_AWS_BIN").unwrap_or_else(|_| "aws".to_string());
+    let audit = AuditLogger::new(&base, aws_bin.clone())?;
     let env = build_environment();
 
     enable_raw_mode()?;

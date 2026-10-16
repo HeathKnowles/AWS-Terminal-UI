@@ -2,14 +2,14 @@ use std::time::{Duration, Instant};
 
 use aws_tui::audit::AuditLogger;
 use aws_tui::awsconfig::AwsEnvironment;
-use aws_tui::builder::{validate_intent, Intent};
+use aws_tui::builder::{Intent, validate_intent};
 use aws_tui::index::SearchIndex;
 use aws_tui::loader::{InputParam, ServiceEntry, ServiceTree};
 use aws_tui::runner::{apply_query, run_command, validate_query};
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
 use ratatui::prelude::CrosstermBackend;
 
-use crate::jsonview::{pretty_json, view_rows, ViewRow};
+use crate::jsonview::{ViewRow, pretty_json, view_rows};
 use crate::ui;
 
 pub const CLI_VERSION: &str = "2.36.18";
@@ -214,7 +214,7 @@ impl App {
                 api_version: String::new(),
             });
         let argv = intent.argv(&self.aws_bin);
-        self.audit.propose(&intent, &provenance, &self.last_source);
+        let reference = self.audit.propose(&intent, &provenance, &self.last_source);
 
         let start = Instant::now();
         self.status = format!("running: {}", intent.command_line(&self.aws_bin));
@@ -242,14 +242,17 @@ impl App {
                     &intent,
                     &provenance,
                     &self.last_source,
-                    out.exit_code,
-                    duration,
-                    output_sha,
-                    if out.stderr.is_empty() {
-                        None
-                    } else {
-                        Some(out.stderr.clone())
+                    aws_tui::audit::ExecutionOutcome {
+                        exit_code: out.exit_code,
+                        duration_ms: duration,
+                        output_sha256: output_sha,
+                        error: if out.stderr.is_empty() {
+                            None
+                        } else {
+                            Some(out.stderr.clone())
+                        },
                     },
+                    Some(reference),
                 );
                 if !out.stderr.is_empty() {
                     self.output.push_str("\n--- stderr ---\n");
@@ -527,7 +530,9 @@ impl App {
 
     /// Count scalar (non-object, non-array) fields in a record.
     fn scalar_count(map: &serde_json::Map<String, serde_json::Value>) -> usize {
-        map.values().filter(|v| !v.is_object() && !v.is_array()).count()
+        map.values()
+            .filter(|v| !v.is_object() && !v.is_array())
+            .count()
     }
 
     pub fn open_picker(&mut self, kind: Picker) {
@@ -612,7 +617,9 @@ pub fn run_tui(
                     modifiers: KeyModifiers::CONTROL,
                     ..
                 }) => break,
-                Event::Key(KeyEvent { code, modifiers, .. }) => {
+                Event::Key(KeyEvent {
+                    code, modifiers, ..
+                }) => {
                     if app.param_popup.is_some() {
                         handle_param_popup_key(app, code);
                     } else if app.picker.is_some() {
