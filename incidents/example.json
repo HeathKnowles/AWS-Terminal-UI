@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "id": "INC-142",
+  "title": "API error rate elevated",
+  "status": "investigating",
+  "severity": "high",
+  "account": "dev",
+  "region": "us-east-1",
+  "signals": [
+    {
+      "ts": "2026-10-01T23:45:00Z",
+      "source": "cloudwatch-alarm",
+      "summary": "5xx rate above threshold on api-prod",
+      "detail": "Collected via aws cloudwatch describe-alarms"
+    },
+    {
+      "ts": "2026-10-01T23:40:00Z",
+      "source": "deployment",
+      "summary": "Deployment d-abc123 finished",
+      "detail": "Correlate before concluding causation"
+    }
+  ],
+  "hypotheses": [
+    {
+      "id": "h1",
+      "statement": "Errors correlate with the latest deployment",
+      "confidence": 60,
+      "supporting": ["alarm fired 5 minutes after deploy finished"],
+      "refuted": false
+    },
+    {
+      "id": "h2",
+      "statement": "Downstream dependency throttling",
+      "confidence": 25,
+      "supporting": [],
+      "refuted": false
+    }
+  ],
+  "plan_path": "plans/example.json",
+  "approvals": [
+    {
+      "step": "subnets",
+      "approver": "oncall",
+      "decision": "approved",
+      "note": "read-only inspection"
+    }
+  ]
+}

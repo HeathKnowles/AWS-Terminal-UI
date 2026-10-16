@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "title": "Verify identity then list subnets",
+  "target": "us-east-1 / default",
+  "steps": [
+    {
+      "id": "whoami",
+      "title": "Confirm effective identity",
+      "service": "sts",
+      "operation": "get-caller-identity",
+      "params": [],
+      "query": null,
+      "output": "json",
+      "requires_approval": false,
+      "preconditions": [],
+      "expected": ["exit 0, identity matches expected account"]
+    },
+    {
+      "id": "subnets",
+      "title": "List subnets with IDs only",
+      "service": "ec2",
+      "operation": "describe-subnets",
+      "params": [],
+      "query": "Subnets[].SubnetId",
+      "output": "json",
+      "requires_approval": true,
+      "preconditions": ["whoami succeeded"],
+      "expected": ["returns subnet list"]
+    }
+  ],
+  "risks": ["read-only operations only"],
+  "preconditions": ["valid AWS credentials for the target account"],
+  "rollback": ["no mutations, nothing to roll back"],
+  "expected": ["identity confirmed, subnets listed"]
+}
