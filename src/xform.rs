@@ -17,44 +17,101 @@ static SPECIAL_CASE: Lazy<Regex> = Lazy::new(|| Regex::new(r"[A-Z]{2,}s$").unwra
 // Prepopulated cache matching `_xform_cache` in botocore/__init__.py.
 // These special cases don't match the regular transformation.
 static XFORM_CACHE_OVERRIDES: &[(&str, &str)] = &[
-    ("AssociateWhatsAppBusinessAccount", "associate-whatsapp-business-account"),
+    (
+        "AssociateWhatsAppBusinessAccount",
+        "associate-whatsapp-business-account",
+    ),
     ("CreateCachediSCSIVolume", "create-cached-iscsi-volume"),
     ("CreateStorediSCSIVolume", "create-stored-iscsi-volume"),
     ("CreateWhatsAppDataset", "create-whatsapp-dataset"),
     ("CreateWhatsAppFlow", "create-whatsapp-flow"),
-    ("CreateWhatsAppMessageTemplate", "create-whatsapp-message-template"),
-    ("CreateWhatsAppMessageTemplateFromLibrary", "create-whatsapp-message-template-from-library"),
-    ("CreateWhatsAppMessageTemplateMedia", "create-whatsapp-message-template-media"),
+    (
+        "CreateWhatsAppMessageTemplate",
+        "create-whatsapp-message-template",
+    ),
+    (
+        "CreateWhatsAppMessageTemplateFromLibrary",
+        "create-whatsapp-message-template-from-library",
+    ),
+    (
+        "CreateWhatsAppMessageTemplateMedia",
+        "create-whatsapp-message-template-media",
+    ),
     ("DeleteWhatsAppFlow", "delete-whatsapp-flow"),
-    ("DeleteWhatsAppMessageMedia", "delete-whatsapp-message-media"),
-    ("DeleteWhatsAppMessageTemplate", "delete-whatsapp-message-template"),
+    (
+        "DeleteWhatsAppMessageMedia",
+        "delete-whatsapp-message-media",
+    ),
+    (
+        "DeleteWhatsAppMessageTemplate",
+        "delete-whatsapp-message-template",
+    ),
     ("DeprecateWhatsAppFlow", "deprecate-whatsapp-flow"),
-    ("DescribeCachediSCSIVolumes", "describe-cached-iscsi-volumes"),
-    ("DescribeStorediSCSIVolumes", "describe-stored-iscsi-volumes"),
-    ("DisassociateWhatsAppBusinessAccount", "disassociate-whatsapp-business-account"),
+    (
+        "DescribeCachediSCSIVolumes",
+        "describe-cached-iscsi-volumes",
+    ),
+    (
+        "DescribeStorediSCSIVolumes",
+        "describe-stored-iscsi-volumes",
+    ),
+    (
+        "DisassociateWhatsAppBusinessAccount",
+        "disassociate-whatsapp-business-account",
+    ),
     ("ExecutePartiQLBatch", "execute-partiql-batch"),
     ("ExecutePartiQLStatement", "execute-partiql-statement"),
     ("ExecutePartiQLTransaction", "execute-partiql-transaction"),
-    ("GetLinkedWhatsAppBusinessAccount", "get-linked-whatsapp-business-account"),
-    ("GetLinkedWhatsAppBusinessAccountPhoneNumber", "get-linked-whatsapp-business-account-phone-number"),
+    (
+        "GetLinkedWhatsAppBusinessAccount",
+        "get-linked-whatsapp-business-account",
+    ),
+    (
+        "GetLinkedWhatsAppBusinessAccountPhoneNumber",
+        "get-linked-whatsapp-business-account-phone-number",
+    ),
     ("GetWhatsAppFlow", "get-whatsapp-flow"),
     ("GetWhatsAppFlowPreview", "get-whatsapp-flow-preview"),
     ("GetWhatsAppMessageMedia", "get-whatsapp-message-media"),
-    ("GetWhatsAppMessageTemplate", "get-whatsapp-message-template"),
-    ("ListHITsForQualificationType", "list-hits-for-qualification-type"),
-    ("ListLinkedWhatsAppBusinessAccounts", "list-linked-whatsapp-business-accounts"),
+    (
+        "GetWhatsAppMessageTemplate",
+        "get-whatsapp-message-template",
+    ),
+    (
+        "ListHITsForQualificationType",
+        "list-hits-for-qualification-type",
+    ),
+    (
+        "ListLinkedWhatsAppBusinessAccounts",
+        "list-linked-whatsapp-business-accounts",
+    ),
     ("ListWhatsAppFlowAssets", "list-whatsapp-flow-assets"),
     ("ListWhatsAppFlows", "list-whatsapp-flows"),
-    ("ListWhatsAppMessageTemplates", "list-whatsapp-message-templates"),
-    ("ListWhatsAppTemplateLibrary", "list-whatsapp-template-library"),
+    (
+        "ListWhatsAppMessageTemplates",
+        "list-whatsapp-message-templates",
+    ),
+    (
+        "ListWhatsAppTemplateLibrary",
+        "list-whatsapp-template-library",
+    ),
     ("PostWhatsAppMessageMedia", "post-whatsapp-message-media"),
     ("PublishWhatsAppFlow", "publish-whatsapp-flow"),
-    ("PutWhatsAppBusinessAccountEventDestinations", "put-whatsapp-business-account-event-destinations"),
-    ("SendWhatsAppConversionEvent", "send-whatsapp-conversion-event"),
+    (
+        "PutWhatsAppBusinessAccountEventDestinations",
+        "put-whatsapp-business-account-event-destinations",
+    ),
+    (
+        "SendWhatsAppConversionEvent",
+        "send-whatsapp-conversion-event",
+    ),
     ("SendWhatsAppMessage", "send-whatsapp-message"),
     ("UpdateWhatsAppFlow", "update-whatsapp-flow"),
     ("UpdateWhatsAppFlowAssets", "update-whatsapp-flow-assets"),
-    ("UpdateWhatsAppMessageTemplate", "update-whatsapp-message-template"),
+    (
+        "UpdateWhatsAppMessageTemplate",
+        "update-whatsapp-message-template",
+    ),
 ];
 
 static XFORM_CACHE: Lazy<Mutex<HashMap<(String, char), String>>> =
@@ -65,10 +122,10 @@ pub fn xform_name(name: &str, sep: char) -> String {
         return name.to_string();
     }
     let key = (name.to_string(), sep);
-    if let Ok(cache) = XFORM_CACHE.lock() {
-        if let Some(v) = cache.get(&key) {
-            return v.clone();
-        }
+    if let Ok(cache) = XFORM_CACHE.lock()
+        && let Some(v) = cache.get(&key)
+    {
+        return v.clone();
     }
     let transformed = xform_name_uncached(name, sep);
     if let Ok(mut cache) = XFORM_CACHE.lock() {
@@ -79,10 +136,7 @@ pub fn xform_name(name: &str, sep: char) -> String {
 
 fn xform_name_uncached(name: &str, sep: char) -> String {
     let sep = sep.to_string();
-    if let Some((special, val)) = XFORM_CACHE_OVERRIDES
-        .iter()
-        .find(|(n, _)| *n == name)
-    {
+    if let Some((special, val)) = XFORM_CACHE_OVERRIDES.iter().find(|(n, _)| *n == name) {
         let _ = special;
         return if sep == "-" {
             val.to_string()
@@ -100,10 +154,9 @@ fn xform_name_uncached(name: &str, sep: char) -> String {
     let s1 = FIRST_CAP
         .replace_all(&name, format!("$1{sep}$2"))
         .to_string();
-    let transformed = END_CAP
+    END_CAP
         .replace_all(&s1, format!("$1{sep}$2"))
-        .to_ascii_lowercase();
-    transformed
+        .to_ascii_lowercase()
 }
 
 #[cfg(test)]
@@ -131,17 +184,32 @@ mod tests {
 
     #[test]
     fn cached_special_cases() {
-        assert_eq!(xform_name("CreateCachediSCSIVolume", '-'), "create-cached-iscsi-volume");
-        assert_eq!(xform_name("ExecutePartiQLStatement", '-'), "execute-partiql-statement");
-        assert_eq!(xform_name("ListHITsForQualificationType", '-'), "list-hits-for-qualification-type");
-        assert_eq!(xform_name("GetWhatsAppMessageMedia", '-'), "get-whatsapp-message-media");
+        assert_eq!(
+            xform_name("CreateCachediSCSIVolume", '-'),
+            "create-cached-iscsi-volume"
+        );
+        assert_eq!(
+            xform_name("ExecutePartiQLStatement", '-'),
+            "execute-partiql-statement"
+        );
+        assert_eq!(
+            xform_name("ListHITsForQualificationType", '-'),
+            "list-hits-for-qualification-type"
+        );
+        assert_eq!(
+            xform_name("GetWhatsAppMessageMedia", '-'),
+            "get-whatsapp-message-media"
+        );
     }
 
     #[test]
     fn cross_check_against_real_models() {
         // Verify against a few operations actually present in the models.
         assert_eq!(xform_name("DescribeSubnets", '-'), "describe-subnets");
-        assert_eq!(xform_name("DescribeAvailabilityZones", '-'), "describe-availability-zones");
+        assert_eq!(
+            xform_name("DescribeAvailabilityZones", '-'),
+            "describe-availability-zones"
+        );
         assert_eq!(xform_name("GetCallerIdentity", '-'), "get-caller-identity");
         assert_eq!(xform_name("ListBuckets", '-'), "list-buckets");
         assert_eq!(xform_name("DescribeVpcs", '-'), "describe-vpcs");

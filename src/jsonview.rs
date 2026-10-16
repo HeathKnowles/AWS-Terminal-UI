@@ -70,12 +70,7 @@ fn object_summary(obj: &serde_json::Map<String, serde_json::Value>) -> String {
 pub fn block_header(v: &serde_json::Value) -> String {
     match v {
         serde_json::Value::Object(m) => {
-            let fields = m
-                .keys()
-                .take(3)
-                .cloned()
-                .collect::<Vec<_>>()
-                .join(", ");
+            let fields = m.keys().take(3).cloned().collect::<Vec<_>>().join(", ");
             if m.is_empty() {
                 "{}".to_string()
             } else if m.len() > 3 {
@@ -188,7 +183,13 @@ pub fn highlight_json(s: &str) -> Vec<Line<'static>> {
                 let mut buf = String::new();
                 buf.push(c);
                 while let Some(&n) = chars.peek() {
-                    if n.is_ascii_digit() || n == '.' || n == 'e' || n == 'E' || n == '+' || n == '-' {
+                    if n.is_ascii_digit()
+                        || n == '.'
+                        || n == 'e'
+                        || n == 'E'
+                        || n == '+'
+                        || n == '-'
+                    {
                         buf.push(n);
                         chars.next();
                     } else {

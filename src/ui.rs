@@ -56,11 +56,7 @@ fn pane_border(focus: bool) -> BorderType {
 }
 
 fn pane_border_color(focus: bool) -> Color {
-    if focus {
-        THEME.focus
-    } else {
-        THEME.border
-    }
+    if focus { THEME.focus } else { THEME.border }
 }
 
 fn draw_status(f: &mut Frame, app: &App, area: Rect) {
@@ -72,13 +68,17 @@ fn draw_status(f: &mut Frame, app: &App, area: Rect) {
     let status = Line::from(vec![
         Span::styled(
             " aws-tui ",
-            Style::default().fg(Color::Black).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::Black)
+                .add_modifier(Modifier::BOLD),
         ),
         Span::raw(" │ "),
         Span::styled("region ", Style::default().fg(Color::DarkGray)),
         Span::styled(
             app.env.active_region.clone(),
-            Style::default().fg(Color::Black).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::Black)
+                .add_modifier(Modifier::BOLD),
         ),
         Span::styled(
             format!(" ({})", app.env.region_source),
@@ -88,13 +88,17 @@ fn draw_status(f: &mut Frame, app: &App, area: Rect) {
         Span::styled("profile ", Style::default().fg(Color::DarkGray)),
         Span::styled(
             app.env.active_profile.clone(),
-            Style::default().fg(Color::Black).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::Black)
+                .add_modifier(Modifier::BOLD),
         ),
         Span::raw("  │  "),
         Span::styled("focus ", Style::default().fg(Color::DarkGray)),
         Span::styled(
             focus_name,
-            Style::default().fg(Color::Black).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::Black)
+                .add_modifier(Modifier::BOLD),
         ),
     ]);
     f.render_widget(
@@ -114,7 +118,9 @@ fn draw_search(f: &mut Frame, app: &App, area: Rect) {
             .border_style(Style::default().fg(pane_border_color(focused)))
             .title(Span::styled(
                 " Search ",
-                Style::default().fg(THEME.accent).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(THEME.accent)
+                    .add_modifier(Modifier::BOLD),
             ))
             .title(Span::styled(
                 " F2 region · F3 profile · Enter run · '>' follow-up ",
@@ -135,7 +141,9 @@ fn draw_results(f: &mut Frame, app: &App, area: Rect) {
             if row.operation.is_empty() {
                 ListItem::new(Span::styled(
                     format!("[{}]", row.service),
-                    Style::default().fg(Color::LightBlue).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(Color::LightBlue)
+                        .add_modifier(Modifier::BOLD),
                 ))
             } else {
                 ListItem::new(Line::from(vec![
@@ -156,7 +164,9 @@ fn draw_results(f: &mut Frame, app: &App, area: Rect) {
                 .border_style(Style::default().fg(pane_border_color(focused)))
                 .title(Span::styled(
                     format!(" Results ({}) ", app.results.len()),
-                    Style::default().fg(THEME.accent).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(THEME.accent)
+                        .add_modifier(Modifier::BOLD),
                 )),
         )
         .highlight_style(
@@ -202,7 +212,9 @@ fn draw_details(f: &mut Frame, app: &mut App, area: Rect) {
             ),
             Span::styled(
                 wrapped.to_string(),
-                Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
             ),
         ]));
     }
@@ -216,13 +228,18 @@ fn draw_details(f: &mut Frame, app: &mut App, area: Rect) {
         ])),
         None => lines.push(Line::from(vec![
             Span::styled("validation ", Style::default().fg(Color::DarkGray)),
-            Span::styled("[OK]", Style::default().fg(THEME.ok).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "[OK]",
+                Style::default().fg(THEME.ok).add_modifier(Modifier::BOLD),
+            ),
         ])),
     }
     lines.push(Line::default());
     lines.push(Line::from(Span::styled(
         "input params:",
-        Style::default().fg(THEME.accent).add_modifier(Modifier::BOLD),
+        Style::default()
+            .fg(THEME.accent)
+            .add_modifier(Modifier::BOLD),
     )));
     if params.is_empty() {
         lines.push(Line::from(Span::styled(
@@ -240,11 +257,19 @@ fn draw_details(f: &mut Frame, app: &mut App, area: Rect) {
             lines.push(Line::from(vec![
                 Span::styled(
                     star,
-                    Style::default().fg(if p.required { THEME.warn } else { Color::DarkGray }),
+                    Style::default().fg(if p.required {
+                        THEME.warn
+                    } else {
+                        Color::DarkGray
+                    }),
                 ),
                 Span::styled(
                     format!("--{}", p.cli_name),
-                    Style::default().fg(if p.required { Color::White } else { Color::DarkGray }),
+                    Style::default().fg(if p.required {
+                        Color::White
+                    } else {
+                        Color::DarkGray
+                    }),
                 ),
                 Span::styled(format!("  {ty}"), Style::default().fg(Color::DarkGray)),
             ]));
@@ -254,7 +279,9 @@ fn draw_details(f: &mut Frame, app: &mut App, area: Rect) {
         lines.push(Line::default());
         lines.push(Line::from(Span::styled(
             "docs:",
-            Style::default().fg(THEME.accent).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(THEME.accent)
+                .add_modifier(Modifier::BOLD),
         )));
         for wrapped in wrap_text(&docs, 72).lines() {
             lines.push(Line::from(Span::styled(
@@ -271,7 +298,9 @@ fn draw_details(f: &mut Frame, app: &mut App, area: Rect) {
             .border_style(Style::default().fg(pane_border_color(focused)))
             .title(Span::styled(
                 " Details ",
-                Style::default().fg(THEME.accent).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(THEME.accent)
+                    .add_modifier(Modifier::BOLD),
             )),
     );
     f.render_widget(details_widget, area);
@@ -292,7 +321,11 @@ fn draw_details(f: &mut Frame, app: &mut App, area: Rect) {
 
 fn draw_output(f: &mut Frame, app: &mut App, area: Rect) {
     let focused = app.focus == Focus::Output;
-    let view_label = if app.view == OutputView::Blocks { "tree" } else { "json" };
+    let view_label = if app.view == OutputView::Blocks {
+        "tree"
+    } else {
+        "json"
+    };
     let breadcrumb: String = app
         .drill_stack
         .iter()
@@ -318,7 +351,9 @@ fn draw_output(f: &mut Frame, app: &mut App, area: Rect) {
         .border_style(Style::default().fg(pane_border_color(focused)))
         .title(Span::styled(
             title,
-            Style::default().fg(THEME.accent).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(THEME.accent)
+                .add_modifier(Modifier::BOLD),
         ));
 
     // Json view: full pretty-printed JSON of the current block.
@@ -330,7 +365,9 @@ fn draw_output(f: &mut Frame, app: &mut App, area: Rect) {
             .unwrap_or_else(|| app.output.clone());
         let lines = highlight_json(&pretty);
         let total = lines.len() as u16;
-        let out = Paragraph::new(lines).block(block).scroll((app.output_scroll, 0));
+        let out = Paragraph::new(lines)
+            .block(block)
+            .scroll((app.output_scroll, 0));
         f.render_widget(out, area);
         draw_vscroll(f, app, total, area);
         return;
@@ -368,51 +405,71 @@ fn draw_output(f: &mut Frame, app: &mut App, area: Rect) {
                     Span::styled(indent, Style::default()),
                     Span::styled(
                         format!("{fold_open} "),
-                        Style::default().fg(THEME.accent).add_modifier(Modifier::BOLD),
+                        Style::default()
+                            .fg(THEME.accent)
+                            .add_modifier(Modifier::BOLD),
                     ),
                     Span::styled(
                         format!("{}  {}", lvl.label, lvl.preview),
-                        Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                        Style::default()
+                            .fg(Color::Cyan)
+                            .add_modifier(Modifier::BOLD),
                     ),
                 ]))
                 .style(Style::default().bg(Color::Indexed(236)))
             })
             .collect();
-        let rows: Vec<ListItem> = rows.iter().enumerate().map(|(i, r)| {
-            let selected = i == selected;
-            let is_parent = r.drill.is_some();
-            let fold = if is_parent { fold_closed } else { " " };
-            let mark = if selected { "▍ " } else { "  " };
-            let indent = "    ".repeat(app.drill_stack.len() + 1);
-            ListItem::new(Line::from(vec![
-                Span::styled(mark, Style::default().fg(THEME.accent)),
-                Span::styled(indent, Style::default()),
-                Span::styled(
-                    format!("{fold} "),
-                    Style::default().fg(if is_parent { THEME.accent } else { Color::DarkGray }),
-                ),
-                Span::styled(
-                    r.label.clone(),
-                    Style::default().fg(THEME.accent).add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(
-                    if is_parent {
-                        format!("  {}", crate::jsonview::block_header(&r.drill.clone().unwrap()))
-                    } else {
-                        format!(": {}", r.value.clone())
-                    },
-                    Style::default().fg(if selected { Color::Black } else { Color::DarkGray }),
-                ),
-            ]))
-            .style(if selected {
-                Style::default().bg(THEME.accent)
-            } else if i % 2 == 1 {
-                Style::default().bg(Color::Indexed(235))
-            } else {
-                Style::default()
+        let rows: Vec<ListItem> = rows
+            .iter()
+            .enumerate()
+            .map(|(i, r)| {
+                let selected = i == selected;
+                let is_parent = r.drill.is_some();
+                let fold = if is_parent { fold_closed } else { " " };
+                let mark = if selected { "▍ " } else { "  " };
+                let indent = "    ".repeat(app.drill_stack.len() + 1);
+                ListItem::new(Line::from(vec![
+                    Span::styled(mark, Style::default().fg(THEME.accent)),
+                    Span::styled(indent, Style::default()),
+                    Span::styled(
+                        format!("{fold} "),
+                        Style::default().fg(if is_parent {
+                            THEME.accent
+                        } else {
+                            Color::DarkGray
+                        }),
+                    ),
+                    Span::styled(
+                        r.label.clone(),
+                        Style::default()
+                            .fg(THEME.accent)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(
+                        if is_parent {
+                            format!(
+                                "  {}",
+                                crate::jsonview::block_header(&r.drill.clone().unwrap())
+                            )
+                        } else {
+                            format!(": {}", r.value.clone())
+                        },
+                        Style::default().fg(if selected {
+                            Color::Black
+                        } else {
+                            Color::DarkGray
+                        }),
+                    ),
+                ]))
+                .style(if selected {
+                    Style::default().bg(THEME.accent)
+                } else if i % 2 == 1 {
+                    Style::default().bg(Color::Indexed(235))
+                } else {
+                    Style::default()
+                })
             })
-        })
-        .collect();
+            .collect();
         all_items.extend(rows);
         let selected_in_list = app.drill_stack.len() + selected;
         let list = List::new(all_items).block(block).highlight_symbol("");
@@ -424,7 +481,9 @@ fn draw_output(f: &mut Frame, app: &mut App, area: Rect) {
 
     // Fallback: raw / syntax-highlighted JSON
     let lines = highlight_json(&app.output);
-    let out = Paragraph::new(lines).block(block).scroll((app.output_scroll, 0));
+    let out = Paragraph::new(lines)
+        .block(block)
+        .scroll((app.output_scroll, 0));
     f.render_widget(out, area);
     draw_vscroll(f, app, app.output_line_count(), area);
 }
@@ -465,7 +524,10 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
             "[PgUp/PgDn] scroll  [v] tree/json  ",
             Style::default().fg(Color::DarkGray),
         ),
-        Span::styled("[Esc] back  [q/Ctrl-C] quit", Style::default().fg(Color::DarkGray)),
+        Span::styled(
+            "[Esc] back  [q/Ctrl-C] quit",
+            Style::default().fg(Color::DarkGray),
+        ),
         Span::styled(
             format!(
                 "  |  {}{}",
@@ -520,7 +582,9 @@ fn draw_picker(f: &mut Frame, app: &App, kind: Picker) {
                 .border_style(Style::default().fg(THEME.accent))
                 .title(Span::styled(
                     title,
-                    Style::default().fg(THEME.accent).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(THEME.accent)
+                        .add_modifier(Modifier::BOLD),
                 ))
                 .style(Style::default().bg(Color::DarkGray)),
         )
@@ -571,16 +635,16 @@ fn draw_param_popup(f: &mut Frame, app: &mut App) {
         lines.push(Line::from(vec![
             Span::styled(
                 label,
-                Style::default().fg(if active { Color::White } else { Color::DarkGray }),
+                Style::default().fg(if active {
+                    Color::White
+                } else {
+                    Color::DarkGray
+                }),
             ),
             Span::raw(" "),
             Span::styled(
                 shown,
-                Style::default().fg(if active {
-                    Color::Black
-                } else {
-                    Color::White
-                }),
+                Style::default().fg(if active { Color::Black } else { Color::White }),
             ),
         ]));
     }
@@ -605,7 +669,9 @@ fn draw_param_popup(f: &mut Frame, app: &mut App) {
             .border_style(Style::default().fg(THEME.accent))
             .title(Span::styled(
                 title,
-                Style::default().fg(THEME.accent).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(THEME.accent)
+                    .add_modifier(Modifier::BOLD),
             ))
             .style(Style::default().bg(Color::DarkGray)),
     );
@@ -617,7 +683,11 @@ fn draw_param_popup(f: &mut Frame, app: &mut App) {
             + 1
             + 24
             + 1
-            + field.value.chars().take(value_col.saturating_sub(2)).count() as u16;
+            + field
+                .value
+                .chars()
+                .take(value_col.saturating_sub(2))
+                .count() as u16;
         f.set_cursor_position((cursor_x, y + 1 + popup.active as u16));
     }
 }
